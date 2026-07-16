@@ -36,6 +36,17 @@ class Config:
     enable_regex: bool = True
     enable_rampart: bool = True
     rampart_confidence: float = 0.5
+    # Per-type minimum confidence overrides (applied as max(global, per-type)).
+    # Address-component types misfire on source code (e.g. "return a + b"
+    # scores ~0.74 as SECONDARY_ADDRESS) while real addresses score ~0.98+,
+    # so they get a stricter floor by default.
+    rampart_type_thresholds: dict[EntityType, float] = field(
+        default_factory=lambda: {
+            EntityType.SECONDARY_ADDRESS: 0.85,
+            EntityType.STREET_NAME: 0.85,
+            EntityType.BUILDING_NUMBER: 0.85,
+        }
+    )
     # entity policy: everything is redacted except these
     public_types: set[EntityType] = field(default_factory=lambda: set(DEFAULT_PUBLIC_TYPES))
     custom_keywords: list[str] = field(default_factory=list)
@@ -70,6 +81,11 @@ class Config:
         cfg.enable_regex = engines.get("regex", cfg.enable_regex)
         cfg.enable_rampart = engines.get("rampart", cfg.enable_rampart)
         cfg.rampart_confidence = engines.get("rampart_confidence", cfg.rampart_confidence)
+        if "rampart_type_thresholds" in engines:
+            cfg.rampart_type_thresholds = {
+                EntityType(k): float(v)
+                for k, v in engines["rampart_type_thresholds"].items()
+            }
         entities = data.get("entities", {})
         if "public_types" in entities:
             cfg.public_types = {EntityType(t) for t in entities["public_types"]}
