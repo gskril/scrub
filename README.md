@@ -303,14 +303,18 @@ real but not 100% — see below).
 
 ## Known limitations
 
-- **`Read`-tool coverage only.** An agent running `Bash cat secrets.pdf` (or
-  `less`, `head`, etc.) bypasses this hook entirely. Bash hardening is a
-  documented future idea (PLAN.md §7), not yet built.
 - **Pasted PII in prompts is not covered.** There's no hook that can rewrite
   the user's own prompt text before the model sees it.
-- **Digital text/PDF only.** Scanned PDFs, images, and Office docs
-  (`.docx`/`.pptx`/`.xlsx`) are not yet supported — OCR and Office
-  extractors are a planned follow-up (PLAN.md §8).
+- **Images are not redacted.** There is no image extractor or OCR, so an image
+  is passed through untouched. In particular, **reading an image with the
+  `Read` tool renders it to the model unredacted** — if it contains visible PII
+  (a photo/screenshot of an ID, a form, a whiteboard), the model sees it. The
+  Bash path is guarded (`scrub-bashguard` blocks `cat`/`python`/`strings`/etc.
+  on an image's bytes and points the agent at `Read`), but that only stops
+  byte-reads, not the visual `Read`. OCR-based image redaction is a possible
+  future feature, deliberately not built. Digital-text **PDFs are fully
+  supported**; scanned (image-only) PDFs are effectively images and share this
+  gap. Office docs (`.docx`/`.pptx`/`.xlsx`) are also not yet supported.
 - **English / Latin-script only** (Rampart covers EN/ES/FR/DE/IT/PT/NL, but
   this build is validated against English fixtures).
 - **No detector is 100%.** The regex+validator layer is held to 100% recall
