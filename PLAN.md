@@ -6,6 +6,10 @@ A performant local CLI that takes **any** media file (text, source, PDF, image, 
 
 - **Language:** Python
 - **Detection engine:** Rampart (National Design Studio) — regex + MiniLM, ~14.7 MB, ~4 ms/text. This is the **only** detector in the core build; the tool is fully functional with just Rampart and requires **no large model download**.
+- **Rampart integration:** **Path A (pure Python) from day 1** — ONNX weights via `onnxruntime` + `tokenizers`, validated against Rampart's published TypeScript eval harness as the golden reference. No Node sidecar (see §3).
+- **v1 scope:** **text/code/config + digital PDF** (phases 0–3, 5, 6). OCR, images, and Office docs are follow-ups.
+- **Fail mode default:** **fail-closed** — if the daemon or an extractor fails, deny the Read with a clear reason (§6).
+- **OCR engine (future phase):** **PaddleOCR**, accepting the heavier install for better accuracy on messy scans.
 - **Future idea (not now):** an optional OpenAI Privacy Filter "deep pass" (~2.8 GB) for context-heavy tax/legal PDFs. Explicitly out of scope for v1 — noted so the architecture leaves room, but nothing about the working tool depends on it.
 - **Hook behavior:** Redact in-place for the agent — the original file on disk is never modified; the agent transparently reads a sanitized copy.
 
@@ -13,11 +17,15 @@ Working name used throughout: **`scrub`**. Rename freely.
 
 ---
 
-## 1. The one architectural fact that drives everything
+## 1. The architectural choice that drives everything
 
-A Claude Code **PostToolUse** hook *cannot* rewrite the content a tool returned — it can only observe, add context, or block (a `updatedToolOutput` capability is an open feature request, not shipped). So we cannot let `Read` run and then edit its output.
+*(Corrected 2026-07: an earlier draft claimed PostToolUse cannot rewrite tool output. That has since shipped — `PostToolUse` now supports `updatedToolOutput`, which replaces the tool's result. PreToolUse is no longer the only option, but it remains the better one here:)*
 
-The supported path is **PreToolUse**, which *can* return `updatedInput` to modify the tool's arguments before it runs. So the design is:
+- **`updatedToolOutput` is capped by the 10,000-char hook output limit** — useless for large files.
+- **Images and PDFs are rendered natively by Claude Code** — you can't return redacted pixels through a text output rewrite, but you *can* point `Read` at a redacted copy on disk.
+- **A path rewrite composes with the content-hash cache** — repeated reads return the same path instantly.
+
+So the primary mechanism is **PreToolUse**, which returns `updatedInput` to modify the tool's arguments before it runs (`updatedToolOutput` stays in the toolbox as a fallback, e.g. for a later Bash-hardening pass). The design is:
 
 > Intercept `Read` in a **PreToolUse** hook → produce a redacted copy of the target file on disk → rewrite `file_path` to point at that copy → let `Read` proceed against the sanitized file.
 
@@ -27,11 +35,14 @@ This is clean: the model reads a real file, just a scrubbed one, and the origina
 // PreToolUse stdout on a match:
 {
   "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
     "permissionDecision": "allow",
     "updatedInput": { "file_path": "/Users/greg/.cache/scrub/ab12cd34.redacted.pdf" }
   }
 }
 ```
+
+> ⚠️ `updatedInput` **replaces the entire `tool_input` object**, not just the fields you name. The hook must echo back every other field from the incoming `tool_input` (e.g. `Read`'s `offset` and `limit`) with only `file_path` swapped.
 
 ---
 
@@ -63,8 +74,8 @@ The **daemon** is the key to being "performant." Loading an ONNX model and compi
 |---|---|---|
 | Text, source code, `.md`, `.json`, `.csv`, `.env`, logs | native read | Character offsets are the "coordinates." |
 | PDF (digital) | **PyMuPDF** (`pymupdf`) | Word-level bounding boxes via `page.get_text("words")`. |
-| PDF (scanned) | PyMuPDF built-in **Tesseract** OCR | `page.get_textpage_ocr()`; boxes come from OCR. |
-| Images `.png/.jpg/.tiff/.webp` | **pytesseract** or **PaddleOCR** | Word boxes from `image_to_data`. PaddleOCR if accuracy matters. |
+| PDF (scanned) | PyMuPDF render → **PaddleOCR** *(post-v1)* | Rasterize page, OCR the image; boxes come from OCR. (PyMuPDF's built-in `get_textpage_ocr()` is Tesseract-only, so scanned pages route through the same PaddleOCR path as images.) |
+| Images `.png/.jpg/.tiff/.webp` | **PaddleOCR** *(post-v1)* | Word boxes from detection results. Chosen over Tesseract for accuracy on messy scans, accepting the heavier install. |
 | `.docx / .pptx / .xlsx` | `python-docx`, `python-pptx`, `openpyxl` | Text runs; redact by run replacement. |
 
 **3. Detector** — Rampart's two-layer approach, reimplemented in Python:
@@ -95,7 +106,7 @@ The model weights are on Hugging Face (`nationaldesignstudio/rampart`) in ONNX f
 **Path B — Node sidecar.**
 Ship the official Rampart NPM lib in a tiny Node service the Python daemon calls over the same socket/IPC. **Pro:** exact fidelity to Rampart's pipeline, upgrades for free. **Con:** a Node runtime dependency inside a "Python tool."
 
-Recommendation: **start with Path B to get correct results fast, then port to Path A** once you've pinned behavior with a golden test set — so you're validating your Python port against a known-good reference instead of the paper.
+**Decision: Path A from day 1.** Building Path B first means building the integration twice and temporarily shipping a Node runtime inside a Python tool. Rampart publishes not just the weights but a **TypeScript eval harness** (CC BY 4.0) — run that harness once, offline, to generate a golden input→output corpus, and validate the Python port against it in CI. That gives the "known-good reference" Path B was meant to provide without ever shipping Node. Pin the HF model revision.
 
 > Note: Rampart is **alpha**, **text-only**, and covers **7 Latin-script languages** (EN/ES/FR/DE/IT/PT/NL). Everything image/PDF is *your* extractor feeding text into it. Since you only need English, this is fine.
 
@@ -112,15 +123,17 @@ Recommendation: **start with Path B to get correct results fast, then port to Pa
   "hooks": {
     "PreToolUse": [
       {
-        "matchers": [{ "field": "tool_name", "value": "Read" }],
-        "handlers": [
-          { "command": "/usr/local/bin/scrub-hook", "timeout": 20 }
+        "matcher": "Read",
+        "hooks": [
+          { "type": "command", "command": "/usr/local/bin/scrub-hook", "timeout": 20 }
         ]
       }
     ]
   }
 }
 ```
+
+*(Corrected 2026-07: the real schema uses a singular `matcher` string and a `hooks` array with `"type": "command"` — an earlier draft used a `matchers`/`handlers` shape that doesn't exist and would silently never fire.)*
 
 ### 4.2 The hook script (`scrub-hook`)
 
@@ -173,7 +186,7 @@ Rust was on the table for raw speed, but with a resident Python daemon + ONNX + 
 - **entity toggles:** which of the ~17 categories to act on; custom keyword list (case names, project codenames).
 - **allow/deny paths:** never-scrub globs (e.g. your own fixtures) and always-scrub globs.
 - **cache:** dir, max size, TTL.
-- **fail mode:** on extractor/daemon error → `fail-open` (allow original, log) or `fail-closed` (deny read). For sensitive work, fail-closed.
+- **fail mode:** on extractor/daemon error → `fail-open` (allow original, log) or `fail-closed` (deny read). **Default: fail-closed** — the tool's whole promise is that raw PII never reaches the model, so the safe behavior must be what runs when nobody is looking. Fail-open is an explicit opt-in. (The hook must therefore auto-spawn the daemon on first call and handle the startup race, or a dead daemon blocks every `Read`.)
 
 ---
 
@@ -193,15 +206,15 @@ Rust was on the table for raw speed, but with a resident Python daemon + ONNX + 
 |---|---|---|
 | 0 | CLI skeleton + type router + text passthrough | Plumbing works end to end |
 | 1 | Deterministic regex+validator layer, text placeholder redaction | Catches structured PII (SSN/EIN/cards) with low FP |
-| 2 | Rampart integration (Path B sidecar, then Path A port) | Context PII (names/addresses) |
+| 2 | Rampart integration (Path A, pure Python, validated against the TS eval harness) | Context PII (names/addresses) |
 | 3 | PDF text extraction + `apply_redactions` + metadata scrub | Real IRS/contract PDFs, unrecoverable |
-| 4 | OCR path for images + scanned PDFs + pixel blackout | "Any media" is true |
-| 5 | Daemon + Unix socket + content-hash cache | Hook-grade latency |
-| 6 | `scrub-hook` + settings.json wiring | Works inside Claude Code |
-| 7 | Eval harness + hardening | Measured recall/precision, regression-proof |
+| 4 | Daemon + Unix socket + content-hash cache | Hook-grade latency |
+| 5 | `scrub-hook` + settings.json wiring | Works inside Claude Code |
+| 6 | Eval harness + hardening | Measured recall/precision, regression-proof |
+| — | *Post-v1:* PaddleOCR path for images + scanned PDFs + pixel blackout; Office docs (`.docx/.pptx/.xlsx`) | "Any media" becomes true |
 | — | *Future:* OpenAI deep pass, pseudonyms, vault, UserPromptSubmit (§7) | Depth & reversibility, when needed |
 
-A useful daily-driver exists at the end of **Phase 6**.
+**v1 = phases 0–5** (text/code/config + digital PDF, wired into Claude Code). A useful daily-driver exists at the end of **Phase 5**; OCR and Office extractors slot in behind the same extractor interface afterward.
 
 ---
 
@@ -222,12 +235,15 @@ A useful daily-driver exists at the end of **Phase 6**.
 - **No detector is 100%,** and cross-domain recall drops sharply. This hook is **defense-in-depth, not a compliance guarantee** — keep human review for anything you'd stake liability on.
 - **The vault (if built) concentrates PII.** Encrypt, scope, and consider whether you want it at all.
 - **Coverage is Read-shaped.** Bash reads and direct pastes need separate handling.
-- **Fail mode matters.** A crashed daemon must not silently pass raw files to the model unless you chose fail-open on purpose.
+- **Fail mode matters.** A crashed daemon must not silently pass raw files to the model unless you chose fail-open on purpose. (Default is fail-closed — §6.)
+- **Unix domain sockets mean macOS/Linux only** for v1. Windows would need a named-pipe or TCP-on-localhost transport; explicitly out of scope until someone asks.
 
 ---
 
 ## 11. Dependency shortlist
 
-**Core (v1):** `python 3.11+`, `onnxruntime`, `tokenizers`, `huggingface_hub`, `pymupdf`, `pytesseract` (+ Tesseract) or `paddleocr`, `pillow`, `python-docx`, `python-pptx`, `openpyxl`, `filetype`/`python-magic`, `typer` (CLI), `pydantic`/`tomllib` (config), `orjson`/`msgspec` (IPC). Only download is Rampart's ~14.7 MB model.
+**Core (v1):** `python 3.11+`, `onnxruntime`, `tokenizers`, `huggingface_hub`, `pymupdf`, `filetype`/`python-magic`, `typer` (CLI), `pydantic`/`tomllib` (config), `orjson`/`msgspec` (IPC). Only download is Rampart's ~14.7 MB model.
 
-**Not installed for v1 (future only):** `torch` + `transformers` and the ~2.8 GB `openai/privacy-filter` weights (deep pass); `cryptography` (vault); Node + `@nationaldesignstudio/rampart` (only if you take the Path B sidecar route in §3).
+**Post-v1 (OCR + Office phases):** `paddleocr` (+ PaddlePaddle), `pillow`, `python-docx`, `python-pptx`, `openpyxl`.
+
+**Not installed for v1 (future only):** `torch` + `transformers` and the ~2.8 GB `openai/privacy-filter` weights (deep pass); `cryptography` (vault). Node + `@nationaldesignstudio/rampart` is used only offline, once, to generate the golden validation corpus from Rampart's eval harness (§3) — it is never a runtime dependency.
