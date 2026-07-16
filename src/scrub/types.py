@@ -30,6 +30,12 @@ class EntityType(StrEnum):
     API_KEY = "API_KEY"
     PRIVATE_KEY = "PRIVATE_KEY"
     JWT = "JWT"
+    DATE_OF_BIRTH = "DATE_OF_BIRTH"
+    DEVICE_ID = "DEVICE_ID"
+    CREDENTIAL = "CREDENTIAL"
+    MEDICAL_ID = "MEDICAL_ID"
+    HEALTH_INFORMATION = "HEALTH_INFORMATION"
+    FINANCIAL_INFORMATION = "FINANCIAL_INFORMATION"
     # Shared between layers (regex catches structured forms, Rampart contextual ones)
     EMAIL = "EMAIL"
     PHONE = "PHONE"

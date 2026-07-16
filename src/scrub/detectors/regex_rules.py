@@ -185,7 +185,8 @@ _NANP_RE = re.compile(r"^\+?1?\D*([2-9]\d{2})\D*([2-9]\d{2})\D*(\d{4})$")
 
 
 def _validate_phone_nanp(m: re.Match, text: str) -> bool:
-    return bool(_NANP_RE.match(m.group(0)))
+    candidate = re.sub(r"(?i)\s*(?:ext\.?|x)\s*\d{1,6}$", "", m.group(0))
+    return bool(_NANP_RE.match(candidate))
 
 
 def _validate_phone_intl(m: re.Match, text: str) -> bool:
@@ -234,6 +235,16 @@ def _validate_mac(m: re.Match, text: str) -> bool:
 _AWS_KEY_RE_STR = r"\bAKIA[0-9A-Z]{16}\b"
 _GITHUB_TOKEN_RE_STR = r"\bgh[pos]_[A-Za-z0-9]{36,}\b"
 _STRIPE_KEY_RE_STR = r"\bsk_live_[A-Za-z0-9]{16,}\b"
+
+
+def _validate_labeled_credential(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return len(value) >= 6 and any(c.isalnum() for c in value)
+
+
+def _validate_labeled_secret(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return len(value) >= 16 and _shannon_entropy(value) >= 3.0
 
 
 def _validate_generic_secret(m: re.Match, text: str) -> bool:
@@ -308,7 +319,8 @@ def _build_rules() -> list[_Rule]:
         _Rule(
             EntityType.PHONE,
             re.compile(
-                r"(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?[2-9]\d{2}[\s.-]?\d{4}(?!\d)"
+                r"(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?[2-9]\d{2}[\s.-]?\d{4}"
+                r"(?:\s*(?:ext\.?|x)\s*\d{1,6})?(?!\d)"
             ),
             _validate_phone_nanp,
         ),
@@ -360,12 +372,186 @@ def _build_rules() -> list[_Rule]:
         _Rule(EntityType.API_KEY, re.compile(_STRIPE_KEY_RE_STR), lambda m, t: True),
         _Rule(
             EntityType.API_KEY,
+            re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b"),
+            lambda m, t: True,
+        ),
+        _Rule(
+            EntityType.API_KEY,
             re.compile(
                 r"(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|"
                 r"secret|token|password|passwd|pwd)\b\s*[:=]\s*[\"']?"
                 r"([A-Za-z0-9_\-/+]{20,100})[\"']?"
             ),
             _validate_generic_secret,
+            group=1,
+        ),
+        # Labels in PDFs are commonly extracted as plain whitespace-separated
+        # text rather than `key: value`. These rules deliberately require a
+        # strong field label so values are not guessed from shape alone.
+        _Rule(
+            EntityType.DATE_OF_BIRTH,
+            re.compile(
+                r"(?i)\b(?:date\s+of\s+birth|dob)\b\s*[:=]?\s*"
+                r"((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+                r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+                r"Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.DRIVERS_LICENSE,
+            re.compile(
+                r"(?i)\b(?:driver(?:'s)?\s+licen[cs]e|dl\s*(?:number|no\.?))\b"
+                r"\s*[:=]?\s*([A-Z0-9][A-Z0-9-]{4,24})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.DEVICE_ID,
+            re.compile(
+                r"(?i)\bdevice\s+id\b\s*[:=]?\s*"
+                r"([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-"
+                r"[0-9A-F](?:\s?[0-9A-F]){11})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.GOVERNMENT_ID,
+            re.compile(
+                r"(?i)\b(?:employee|payroll)\s+id\b\s*[:=]?\s*"
+                r"([A-Z]{2,5}-[A-Z0-9-]{4,20})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.GOVERNMENT_ID,
+            re.compile(r"(?i)\bverification\s+pin\b\s*[:=]?\s*(\d{4,12})"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.MEDICAL_ID,
+            re.compile(
+                r"(?i)\b(?:member\s+id|group\s+number|medical\s+record\s+(?:number|no\.?))"
+                r"\s*[:=]?\s*([A-Z]{2,5}-[A-Z0-9-]{4,20})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                r"(?i)\b(?:temporary\s+password|password|username)\b"
+                r"\s*[:=]?\s*([^\s,;]{6,100})"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                r"(?i)\bsecurity\s+answer\b\s*[:=]?\s*"
+                r"([A-Za-z][A-Za-z' -]{2,60}?)(?=\s+(?:\d+\.|medical\b|health\s+plan\b)|[\r\n]+|$)"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.API_KEY,
+            re.compile(r"(?i)\b(?:api\s+token|api\s+key)\b\s*[:=]?\s*([^\s,;]{16,100})"),
+            _validate_labeled_secret,
+            group=1,
+        ),
+        _Rule(
+            EntityType.FINANCIAL_INFORMATION,
+            re.compile(r"(?i)\b(?:expiration\s*/\s*cvv|cvv)\b\s*[:=]?\s*(\d{1,2}/\d{2,4}\s*/\s*\d{3,4}|\d{3,4})"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.FINANCIAL_INFORMATION,
+            re.compile(r"(?i)\bannual\s+income\b\s*[:=]?\s*(\$[\d,]+(?:\.\d{2})?)"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.FINANCIAL_INFORMATION,
+            re.compile(
+                r"(?i)\btax\s+filing\s+status\b\s*[:=]?\s*"
+                r"(single|married\s+filing\s+(?:jointly|separately)|head\s+of\s+household|widow(?:er)?)"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.STREET_NAME,
+            re.compile(
+                r"(?i)\b(\d{1,6}\s+(?:(?!(?:address|phone|ext|number|id)\b)[A-Z0-9.'-]+\s+){0,5}"
+                r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|"
+                r"Drive|Court|Ct\.?|Terrace|Way|Place|Pl\.?)(?![A-Za-z])"
+                r"(?:,?\s+(?:Apt\.?|Suite|Ste\.?|Unit|#)\s*[A-Z0-9-]+)?)"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(r"(?i)\bblood\s+type\b\s*[:=]?\s*((?:A|B|AB|O)\s+(?:positive|negative))"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                r"(?i)\bhealth\s+plan\b\s*[:=]?\s*(.+?)"
+                r"(?=\s+member\s+id\b|[\r\n]+|$)"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                r"(?i)\bprimary\s+physician\b\s*[:=]?\s*(.+?)"
+                r"(?=\s+medical\s+record\b|[\r\n]+|$)"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                r"(?i)\brecent\s+visit\b\s*[:=]?\s*"
+                r"((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+                r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+                r"Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                r"(?i)\bclinic\b\s*[:=]?\s*(.+?)"
+                r"(?=\s+\d+\.\s+[A-Za-z]|[\r\n]+|$)"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(r"(?i)\bcondition\b\s*[:=]?\s*(.+?)(?=\s+medication\b|[\r\n]+|$)"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(r"(?i)\bmedication\b\s*[:=]?\s*(.+?)(?=\s+recent\s+visit\b|[\r\n]+|$)"),
+            lambda m, t: True,
             group=1,
         ),
         # --- PRIVATE_KEY -------------------------------------------------
