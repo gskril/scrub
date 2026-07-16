@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from click.utils import strip_ansi
 from typer.testing import CliRunner
 
 from scrub.cli import app
@@ -50,16 +51,17 @@ def test_every_help_command_succeeds(args: list[str]) -> None:
     ],
 )
 def test_bare_file_commands_show_help(command: str, options: list[str]) -> None:
-    # Fix the render width so Rich doesn't elide option names based on the
-    # ambient CI terminal width.
+    # Fix the render width and remove ANSI styling so assertions don't depend
+    # on the ambient terminal or GitHub Actions' forced-color environment.
     result = runner.invoke(app, [command], terminal_width=120)
+    output = strip_ansi(result.output)
 
     assert result.exit_code == 0
-    assert "Usage:" in result.output
-    assert command in result.output
-    assert "FILE" in result.output
+    assert "Usage:" in output
+    assert command in output
+    assert "FILE" in output
     for option in options:
-        assert option in result.output
+        assert option in output
 
 
 def test_download_command_installs_model(monkeypatch) -> None:
