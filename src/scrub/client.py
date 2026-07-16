@@ -61,6 +61,10 @@ def redact(config: Config | None, path: Path) -> dict:
     return _request({"op": "redact", "path": str(path)}, read_timeout=_REDACT_TIMEOUT)
 
 
+def redact_text_request(config: Config | None, text: str) -> dict:
+    return _request({"op": "redact_text", "text": text}, read_timeout=_REDACT_TIMEOUT)
+
+
 def shutdown(config: Config | None = None) -> dict:
     return _request({"op": "shutdown"}, read_timeout=_CONNECT_TIMEOUT)
 
