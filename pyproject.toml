@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scrub-pii"
+version = "0.1.0"
+description = "Local PII redactor CLI + Claude Code PreToolUse hook: files are scrubbed before the model ever sees them."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "huggingface_hub>=0.23",
+    "pymupdf>=1.24",
+    "filetype>=1.2",
+    "typer>=0.12",
+    "pydantic>=2.7",
+    "orjson>=3.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+scrub = "scrub.cli:app"
+scrub-hook = "scrub.hook:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
