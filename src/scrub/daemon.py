@@ -6,6 +6,8 @@ domain socket so the hook stays fast. Protocol is newline-delimited JSON
 
   {"op":"redact","path":"/abs/file"}
       -> {"ok":true,"redacted_path":str|null,"found":N,"cache_hit":bool}
+  {"op":"redact_text","text":"..."}
+      -> {"ok":true,"redacted":str,"found":N}   # in-memory, nothing on disk
   {"op":"ping"}     -> {"ok":true,"pong":true,"pid":N}
   {"op":"shutdown"} -> {"ok":true} then the daemon exits.
   errors            -> {"ok":false,"error":"..."}
@@ -212,7 +214,17 @@ class Daemon:
             if not path:
                 return {"ok": False, "error": "missing path"}
             return self._redact(Path(path))
+        if op == "redact_text":
+            text = req.get("text")
+            if text is None:
+                return {"ok": False, "error": "missing text"}
+            return self._redact_text(text)
         return {"ok": False, "error": f"unknown op {op!r}"}
+
+    def _redact_text(self, text: str) -> dict:
+        with self._lock:
+            redacted, found = self.pipeline.redact_text_content(text)
+        return {"ok": True, "redacted": redacted, "found": found}
 
     def _redact(self, path: Path) -> dict:
         with self._lock:

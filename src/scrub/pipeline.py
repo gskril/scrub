@@ -272,6 +272,25 @@ class Pipeline:
             return []
         return self._detect(extraction)
 
+    def redact_text_content(self, text: str) -> tuple[str, int]:
+        """Redact PII in an in-memory string — no file, nothing written to disk.
+
+        Drives the same detect -> redact path as `redact_file`, but on text the
+        caller already holds (e.g. a tool's stdout). Returns
+        (redacted_text, found) where `found` counts non-public entities; when
+        `found == 0` the original text is returned unchanged so the caller can
+        cheaply detect "nothing to do".
+        """
+        if not text:
+            return text, 0
+        extraction = Extraction(text=text, kind="text")
+        spans = self._detect(extraction)
+        found = sum(1 for s in spans if s.entity_type not in self.config.public_types)
+        if found == 0:
+            return text, 0
+        redacted, _ = redact_text(extraction.text, spans, self.config)
+        return redacted, found
+
     def redact_file(self, path: Path) -> RedactionResult:
         path = Path(path)
         extraction = self._route_and_extract(path)
