@@ -124,3 +124,16 @@ def test_regex_pre_empts_overlapping_longer_ml() -> None:
     out = merge_spans(regex, ml)
     assert len(out) == 1
     assert out[0].source == "regex"
+
+
+# ------------------------------------------------- custom keyword precedence
+
+
+def test_custom_keyword_beats_overlapping_ml_span() -> None:
+    # A user-configured keyword (source="custom", conf 1.0) is deterministic
+    # tier: a longer overlapping ML span must NOT displace it.
+    custom = Span(10, 26, EntityType.CUSTOM, "Project Nightjar", 1.0, "custom")
+    ml = Span(5, 30, EntityType.GIVEN_NAME, "for Project Nightjar tea", 0.95, "rampart")
+    merged = merge_spans([custom], [ml])
+    assert custom in merged
+    assert ml not in merged

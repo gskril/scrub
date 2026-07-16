@@ -9,7 +9,6 @@ metadata dump.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
 import pymupdf
@@ -17,8 +16,6 @@ import pymupdf
 from ..config import Config
 from ..types import Extraction, ReportEntity, Span
 from .placeholders import assign_placeholders
-
-logger = logging.getLogger(__name__)
 
 # Small padding (in PDF points) added around each word's bounding box so the
 # black fill fully covers antialiased glyph edges.
@@ -87,14 +84,16 @@ def redact_pdf(
             continue  # public type: report it, don't black it out
 
         if not overlapping:
-            logger.warning(
-                "span %r (%s, %d-%d) did not overlap any WordBox; nothing to redact on the page",
-                placeholder,
-                span.entity_type,
-                span.start,
-                span.end,
+            # Every detected span is offsets into text built from these very
+            # WordBoxes, so zero overlap means the offset mapping is broken.
+            # Writing output anyway would ship a "sanitized" PDF that still
+            # contains this value — fail instead (the hook turns this into a
+            # deny under fail-closed).
+            raise RuntimeError(
+                f"PDF redaction cannot locate span {placeholder} "
+                f"({span.entity_type}, chars {span.start}-{span.end}) on any page; "
+                "refusing to write partially-redacted output"
             )
-            continue
 
         for wb in overlapping:
             rect = pymupdf.Rect(

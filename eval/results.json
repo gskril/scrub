@@ -1,7 +1,7 @@
 {
   "corpus_docs": 20,
   "corpus_dir": "/home/user/redactor/eval/generated",
-  "elapsed_s": 1.063,
+  "elapsed_s": 1.305,
   "release_blocking": {
     "API_KEY": {
       "caught": 9,

@@ -14,6 +14,11 @@ from ..types import Span
 # subwords, so Rampart can't re-derive or mangle an already-caught entity.
 _SENTINEL = "█"  # █
 
+# Span sources that win overlaps against ML spans: validated regex hits and
+# user-configured custom keywords (both confidence 1.0, both masked before
+# the ML pass — the merge tier must match the masking tier).
+DETERMINISTIC_SOURCES = frozenset({"regex", "custom"})
+
 
 def mask_for_ml(text: str, regex_spans: list[Span]) -> str:
     """Replace each regex-detected span with a same-length run of sentinel
@@ -47,8 +52,9 @@ def merge_spans(regex_spans: list[Span], ml_spans: list[Span]) -> list[Span]:
     """
 
     def sort_key(s: Span) -> tuple[int, int, float, int]:
-        is_regex = 0 if s.source == "regex" else 1  # regex tier first
-        return (is_regex, -len(s), -s.confidence, s.start)
+        # deterministic tier (regex, custom keywords) first
+        is_deterministic = 0 if s.source in DETERMINISTIC_SOURCES else 1
+        return (is_deterministic, -len(s), -s.confidence, s.start)
 
     candidates = sorted([*regex_spans, *ml_spans], key=sort_key)
     accepted: list[Span] = []

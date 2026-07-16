@@ -18,7 +18,7 @@ import orjson
 
 from .config import Config, cache_dir
 from .detectors.custom import CustomKeywordDetector
-from .detectors.merge import mask_for_ml, merge_spans
+from .detectors.merge import DETERMINISTIC_SOURCES, mask_for_ml, merge_spans
 from .detectors.regex_rules import RegexDetector
 from .extractors.text import TextExtractor
 from .redactors.placeholders import assign_placeholders
@@ -29,8 +29,9 @@ from .types import Detector, Extraction, Extractor, RedactionResult, ReportEntit
 RedactorFn = Callable[[str, list[Span], Config], tuple[str, list[ReportEntity]]]
 
 # Detectors in this set run first on the raw text; their hits are masked to
-# sentinels before ML detectors run, and they win overlaps in the merge.
-_DETERMINISTIC_DETECTORS = frozenset({"regex", "custom"})
+# sentinels before ML detectors run, and they win overlaps in the merge
+# (merge.DETERMINISTIC_SOURCES must agree with this set).
+_DETERMINISTIC_DETECTORS = DETERMINISTIC_SOURCES
 
 
 def resolve_overlaps(spans: list[Span]) -> list[Span]:
@@ -103,6 +104,33 @@ def _propagate_values(text: str, spans: list[Span]) -> list[Span]:
             )
             occupied.append((m.start(), m.end()))
     return extra
+
+
+def _pdf_has_metadata(path: Path) -> bool:
+    """True if the PDF carries any document metadata or XMP. Metadata can
+    hold PII (author, title, creator paths) even when the body is clean, so
+    a metadata-bearing PDF must never pass through unscrubbed."""
+    import pymupdf
+
+    try:
+        doc = pymupdf.open(path)
+    except Exception:  # noqa: BLE001 — unreadable PDFs are handled upstream
+        return False
+    try:
+        # "format" and "encryption" are intrinsic document properties PyMuPDF
+        # always reports, not author-supplied metadata — never PII.
+        if any(
+            (v or "").strip()
+            for k, v in (doc.metadata or {}).items()
+            if k not in ("format", "encryption")
+        ):
+            return True
+        try:
+            return bool((doc.get_xml_metadata() or "").strip())
+        except Exception:  # noqa: BLE001
+            return False
+    finally:
+        doc.close()
 
 
 def _entity_to_dict(e: ReportEntity) -> dict:
@@ -253,7 +281,13 @@ class Pipeline:
         spans = self._detect(extraction)
         found = sum(1 for s in spans if s.entity_type not in self.config.public_types)
 
-        if found == 0:
+        # PDFs with document metadata/XMP get a scrubbed copy even when the
+        # body is clean — metadata (author, title, creator) can carry PII
+        # that body detection never sees.
+        needs_output = found > 0 or (
+            extraction.kind == "pdf" and _pdf_has_metadata(path)
+        )
+        if not needs_output:
             entities = self._passthrough_entities(spans)
             return RedactionResult(
                 original_path=path, redacted_path=None, found=0, entities=entities

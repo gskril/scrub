@@ -129,6 +129,53 @@ def test_value_propagation(pipeline, tmp_path):
     assert "Garcia" not in redacted, "detected value leaked at another occurrence"
 
 
+def test_pdf_metadata_only_gets_scrubbed(pipeline, tmp_path):
+    # Body is clean, but metadata carries a name: the PDF must NOT pass
+    # through untouched — a scrubbed copy with empty metadata is required.
+    src = tmp_path / "meta_only.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "Quarterly maintenance checklist, all items nominal.")
+    doc.set_metadata({"author": "Maria Garcia", "title": "Maria Garcia private notes"})
+    doc.save(src)
+    doc.close()
+
+    result = pipeline.redact_file(src)
+    assert result.redacted_path is not None, "metadata-bearing PDF passed through"
+
+    out = pymupdf.open(result.redacted_path)
+    try:
+        leftover = {
+            k: v
+            for k, v in (out.metadata or {}).items()
+            if v and k not in ("format", "encryption")  # intrinsic, never PII
+        }
+        assert not leftover, f"metadata survived the scrub: {leftover}"
+    finally:
+        out.close()
+
+
+def test_pdf_span_without_wordbox_raises(tmp_path):
+    from scrub.extractors.pdf import PdfExtractor
+    from scrub.redactors.pdf import redact_pdf
+    from scrub.types import Span
+
+    pdfs = {p.name: p for p in make_all(tmp_path / "pdfs")}
+    extraction = PdfExtractor().extract(pdfs["letter.pdf"])
+    # A span pointing past the extracted text can't map to any WordBox;
+    # writing output anyway would ship an unredacted "sanitized" PDF.
+    bogus = Span(
+        start=len(extraction.text) + 10,
+        end=len(extraction.text) + 20,
+        entity_type=EntityType.SSN,
+        text="458-02-6841",
+        confidence=1.0,
+        source="regex",
+    )
+    with pytest.raises(RuntimeError, match="cannot locate span"):
+        redact_pdf(pdfs["letter.pdf"], tmp_path / "out.pdf", [bogus], extraction, Config())
+
+
 def test_custom_keywords(tmp_path):
     cfg = Config()
     cfg.custom_keywords = ["Project Nightjar"]
