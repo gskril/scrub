@@ -114,6 +114,21 @@ def test_clean_file_passthrough(pipeline, tmp_path):
     assert result.redacted_path is None
 
 
+def test_value_propagation(pipeline, tmp_path):
+    # Rampart often tags a name in prose but misses the identical string in
+    # an address-block/tabular context. The propagation post-pass must redact
+    # every literal occurrence of any detected value.
+    src = tmp_path / "letter.txt"
+    src.write_text(
+        "Garcia\n88 Lighthouse Way\n\n"  # address-block context Rampart tends to miss
+        "Dear Ms. Maria Garcia,\n\n"
+        "Thank you for banking with us. We will contact you shortly.\n"
+    )
+    result = pipeline.redact_file(src)
+    redacted = result.redacted_path.read_text()
+    assert "Garcia" not in redacted, "detected value leaked at another occurrence"
+
+
 def test_custom_keywords(tmp_path):
     cfg = Config()
     cfg.custom_keywords = ["Project Nightjar"]

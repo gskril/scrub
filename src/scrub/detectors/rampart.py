@@ -242,6 +242,18 @@ class RampartDetector:
             for s in spans
             if s.confidence >= max(base, overrides.get(s.entity_type, base))
         ]
+
+        # Latin-script personal names are capitalized; a name span with no
+        # uppercase letter is almost always a code/prose token misread (the
+        # model is uncased and scores e.g. 'daemon' ~0.52 as GIVEN_NAME).
+        # Confidence can't separate these from real names in awkward contexts
+        # (which score as low as ~0.42), but capitalization does.
+        spans = [
+            s
+            for s in spans
+            if s.entity_type not in (EntityType.GIVEN_NAME, EntityType.SURNAME)
+            or any(c.isupper() for c in s.text)
+        ]
         spans.sort(key=lambda s: (s.start, s.end))
         return spans
 

@@ -10,6 +10,7 @@ exist so that's additive, not a rewrite.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -55,6 +56,53 @@ def resolve_overlaps(spans: list[Span]) -> list[Span]:
         chosen.append(span)
     chosen.sort(key=lambda s: s.start)
     return chosen
+
+
+def _propagate_values(text: str, spans: list[Span]) -> list[Span]:
+    """Value propagation: if a value was detected anywhere in the document,
+    redact ALL its other literal occurrences too.
+
+    Rampart's per-occurrence recall is context-dependent — it can tag
+    "Garcia" in a salutation but miss the identical string in an address
+    block two lines up, leaving `[GIVEN_NAME_1] Garcia` in the output. A
+    detected value is sensitive everywhere it appears, so this deterministic
+    post-pass closes that leak class. Word-boundary anchored,
+    case-insensitive, values shorter than 3 chars skipped (too collision-
+    prone, e.g. state codes).
+    """
+    occupied = sorted((s.start, s.end) for s in spans)
+
+    def overlaps_existing(start: int, end: int) -> bool:
+        return any(start < e and s < end for s, e in occupied)
+
+    extra: list[Span] = []
+    seen: set[str] = set()
+    for span in spans:
+        value = span.text
+        key = value.casefold()
+        # Only propagate reasonably confident detections — propagation
+        # amplifies its source, so a borderline ML false positive must not
+        # spread. (Real names in awkward contexts score ~0.6; code-token
+        # false positives are filtered upstream by the capitalization rule.)
+        if span.confidence < 0.6 or len(value.strip()) < 3 or key in seen:
+            continue
+        seen.add(key)
+        pattern = re.compile(rf"(?<!\w){re.escape(value)}(?!\w)", re.IGNORECASE)
+        for m in pattern.finditer(text):
+            if m.start() == span.start or overlaps_existing(m.start(), m.end()):
+                continue
+            extra.append(
+                Span(
+                    start=m.start(),
+                    end=m.end(),
+                    entity_type=span.entity_type,
+                    text=m.group(),
+                    confidence=span.confidence,
+                    source="propagated",
+                )
+            )
+            occupied.append((m.start(), m.end()))
+    return extra
 
 
 def _entity_to_dict(e: ReportEntity) -> dict:
@@ -167,7 +215,8 @@ class Pipeline:
         # contain sentinel characters.
         for s in ml_spans:
             s.text = extraction.text[s.start : s.end]
-        return merge_spans(det_spans, ml_spans)
+        merged = merge_spans(det_spans, ml_spans)
+        return merge_spans(merged, _propagate_values(extraction.text, merged))
 
     def _passthrough_entities(self, spans: list[Span]) -> list[ReportEntity]:
         """ReportEntities for a passthrough result (only public-type spans
