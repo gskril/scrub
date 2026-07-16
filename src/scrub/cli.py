@@ -98,5 +98,94 @@ def scan(
     raise typer.Exit(code=0)
 
 
+# --------------------------------------------------------------- hook install
+
+@app.command("install-hook")
+def install_hook_cmd(
+    project: bool = typer.Option(False, "--project", help="Install into ./.claude/settings.json"),
+    user: bool = typer.Option(False, "--user", help="Install into ~/.claude/settings.json (default)"),
+) -> None:
+    """Register the scrub PreToolUse hook in Claude Code settings."""
+    from . import install as install_mod
+
+    if project and user:
+        typer.echo("scrub: pass at most one of --project / --user", err=True)
+        raise typer.Exit(code=2)
+    scope = "project" if project else "user"
+    path, command = install_mod.install(scope)
+    typer.echo(f"scrub: hook installed ({scope}) -> {path}")
+    typer.echo(f"  command: {command}")
+    raise typer.Exit(code=0)
+
+
+@app.command("uninstall-hook")
+def uninstall_hook_cmd(
+    project: bool = typer.Option(False, "--project", help="Uninstall from ./.claude/settings.json"),
+    user: bool = typer.Option(False, "--user", help="Uninstall from ~/.claude/settings.json (default)"),
+) -> None:
+    """Remove the scrub PreToolUse hook from Claude Code settings."""
+    from . import install as install_mod
+
+    if project and user:
+        typer.echo("scrub: pass at most one of --project / --user", err=True)
+        raise typer.Exit(code=2)
+    scope = "project" if project else "user"
+    path, removed = install_mod.uninstall(scope)
+    if removed:
+        typer.echo(f"scrub: hook removed ({scope}) -> {path}")
+    else:
+        typer.echo(f"scrub: no scrub hook found in {path} (nothing to do)")
+    raise typer.Exit(code=0)
+
+
+# --------------------------------------------------------------- daemon control
+
+daemon_app = typer.Typer(add_completion=False, help="Manage the scrub daemon")
+app.add_typer(daemon_app, name="daemon")
+
+
+@daemon_app.command("start")
+def daemon_start() -> None:
+    """Start the scrub daemon (no-op if one is already running)."""
+    from . import client
+
+    config = Config.load()
+    try:
+        resp = client.ensure_daemon(config)
+    except client.DaemonError as e:
+        typer.echo(f"scrub: could not start daemon: {e}", err=True)
+        raise typer.Exit(code=1) from e
+    typer.echo(f"scrub: daemon running (pid {resp.get('pid')})")
+    raise typer.Exit(code=0)
+
+
+@daemon_app.command("stop")
+def daemon_stop() -> None:
+    """Stop the running scrub daemon."""
+    from . import client
+
+    try:
+        client.shutdown()
+    except OSError:
+        typer.echo("scrub: no daemon running")
+        raise typer.Exit(code=0)
+    typer.echo("scrub: daemon stopped")
+    raise typer.Exit(code=0)
+
+
+@daemon_app.command("status")
+def daemon_status() -> None:
+    """Report whether the scrub daemon is running."""
+    from . import client
+
+    try:
+        resp = client.ping()
+    except OSError:
+        typer.echo("scrub: daemon not running")
+        raise typer.Exit(code=1)
+    typer.echo(f"scrub: daemon running (pid {resp.get('pid')})")
+    raise typer.Exit(code=0)
+
+
 if __name__ == "__main__":
     app()
