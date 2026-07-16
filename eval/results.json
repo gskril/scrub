@@ -1,0 +1,114 @@
+{
+  "corpus_docs": 20,
+  "corpus_dir": "/home/user/redactor/eval/generated",
+  "elapsed_s": 1.305,
+  "release_blocking": {
+    "API_KEY": {
+      "caught": 9,
+      "total": 9,
+      "recall": 1.0,
+      "ok": true
+    },
+    "BANK_ACCOUNT": {
+      "caught": 8,
+      "total": 8,
+      "recall": 1.0,
+      "ok": true
+    },
+    "CREDIT_CARD": {
+      "caught": 1,
+      "total": 1,
+      "recall": 1.0,
+      "ok": true
+    },
+    "EIN": {
+      "caught": 6,
+      "total": 6,
+      "recall": 1.0,
+      "ok": true
+    },
+    "JWT": {
+      "caught": 2,
+      "total": 2,
+      "recall": 1.0,
+      "ok": true
+    },
+    "PRIVATE_KEY": {
+      "caught": 1,
+      "total": 1,
+      "recall": 1.0,
+      "ok": true
+    },
+    "ROUTING_NUMBER": {
+      "caught": 8,
+      "total": 8,
+      "recall": 1.0,
+      "ok": true
+    },
+    "SSN": {
+      "caught": 6,
+      "total": 6,
+      "recall": 1.0,
+      "ok": true
+    }
+  },
+  "release_blocking_pass": true,
+  "other_recall": {
+    "EMAIL": {
+      "caught": 15,
+      "total": 15,
+      "recall": 1.0
+    },
+    "GIVEN_NAME": {
+      "caught": 19,
+      "total": 19,
+      "recall": 1.0
+    },
+    "ITIN": {
+      "caught": 1,
+      "total": 1,
+      "recall": 1.0
+    },
+    "PHONE": {
+      "caught": 11,
+      "total": 11,
+      "recall": 1.0
+    },
+    "STREET_NAME": {
+      "caught": 7,
+      "total": 8,
+      "recall": 0.875
+    },
+    "SURNAME": {
+      "caught": 18,
+      "total": 19,
+      "recall": 0.9473684210526315
+    }
+  },
+  "misses": [
+    {
+      "doc": "letter_bank.txt",
+      "entity_type": "STREET_NAME",
+      "value": "88 Lighthouse Way"
+    },
+    {
+      "doc": "customers.csv",
+      "entity_type": "SURNAME",
+      "value": "Mensah"
+    }
+  ],
+  "false_positive_proxy": {
+    "control_docs": 5,
+    "control_docs_with_redactions": 1,
+    "total_redactions_in_controls": 2,
+    "details": [
+      {
+        "doc": "control_numeric_edge_cases.py",
+        "found": 2,
+        "types": [
+          "PHONE"
+        ]
+      }
+    ]
+  }
+}
