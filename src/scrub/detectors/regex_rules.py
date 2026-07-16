@@ -185,7 +185,8 @@ _NANP_RE = re.compile(r"^\+?1?\D*([2-9]\d{2})\D*([2-9]\d{2})\D*(\d{4})$")
 
 
 def _validate_phone_nanp(m: re.Match, text: str) -> bool:
-    return bool(_NANP_RE.match(m.group(0)))
+    candidate = re.sub(r"(?i)\s*(?:ext\.?|x)\s*\d{1,10}$", "", m.group(0))
+    return bool(_NANP_RE.match(candidate))
 
 
 def _validate_phone_intl(m: re.Match, text: str) -> bool:
@@ -236,6 +237,26 @@ _GITHUB_TOKEN_RE_STR = r"\bgh[pos]_[A-Za-z0-9]{36,}\b"
 _STRIPE_KEY_RE_STR = r"\bsk_live_[A-Za-z0-9]{16,}\b"
 
 
+def _validate_labeled_credential(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return len(value) >= 6 and any(c.isalnum() for c in value)
+
+
+def _validate_labeled_password(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return len(value) >= 6 and any(not c.isspace() for c in value)
+
+
+def _validate_labeled_id(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return 4 <= len(value) <= 25 and any(c.isdigit() for c in value)
+
+
+def _validate_labeled_secret(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return len(value) >= 16 and _shannon_entropy(value) >= 3.0
+
+
 def _validate_generic_secret(m: re.Match, text: str) -> bool:
     value = m.group(1)
     if len(value) < 20:
@@ -276,6 +297,30 @@ class _Rule:
     group: int = 0  # which regex group's span to use (0 = whole match)
 
 
+# PyMuPDF joins every word on a page with spaces, so delimiter-free field
+# values need to stop at the next recognizable field label rather than at a
+# newline. Keep this list restricted to strong document labels. In particular,
+# delimiter-free free-form rules below require one of these boundaries; they
+# do not treat end-of-string as sufficient, which avoids matching ordinary
+# prose such as "The clinic remains open".
+_PDF_FIELD_LABEL_RE_STR = (
+    r"(?:full\s+legal\s+name|date\s+of\s+birth|ssn|passport\s+no\.?|"
+    r"driver(?:'s)?\s+licen[cs]e|issuing\s+state|mother's\s+maiden\s+name|"
+    r"(?:employee|payroll)\s+id|home\s+address|(?:personal\s+|work\s+)?email|mobile\s+phone|"
+    r"emergency\s+contact|ip\s+address|device\s+id|bank|account\s+holder|"
+    r"routing\s+number|account\s+number|credit\s+card|expiration\s*/\s*cvv|"
+    r"annual\s+income|tax\s+filing\s+status|employer|manager|"
+    r"work\s+phone|office\s+address|username|temporary\s+password|password|"
+    r"api\s+(?:token|key)|security\s+answer|health\s+plan|member\s+id|"
+    r"group\s+number|primary\s+physician|medical\s+record\s+(?:number|no\.?)|"
+    r"blood\s+type|condition|medication|recent\s+visit|clinic|"
+    r"verification\s+pin|\d+\.\s+[A-Za-z])"
+)
+_PDF_FIELD_END_RE_STR = rf"(?=\s+(?i:{_PDF_FIELD_LABEL_RE_STR})|[\r\n]+)"
+_EXPLICIT_FIELD_END_RE_STR = rf"(?=\s+(?i:{_PDF_FIELD_LABEL_RE_STR})|[\r\n]+|$)"
+_FREEFORM_VALUE_RE_STR = r"(\S(?:.{0,98}?\S)?)"
+
+
 def _build_rules() -> list[_Rule]:
     return [
         # --- SSN ---------------------------------------------------------
@@ -308,7 +353,9 @@ def _build_rules() -> list[_Rule]:
         _Rule(
             EntityType.PHONE,
             re.compile(
-                r"(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?[2-9]\d{2}[\s.-]?\d{4}(?!\d)"
+                r"(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?[2-9]\d{2}[\s.-]?\d{4}"
+                r"(?:\s*(?:ext\.?|x)\s*\d{1,10})?(?!\d)",
+                re.IGNORECASE,
             ),
             _validate_phone_nanp,
         ),
@@ -360,12 +407,250 @@ def _build_rules() -> list[_Rule]:
         _Rule(EntityType.API_KEY, re.compile(_STRIPE_KEY_RE_STR), lambda m, t: True),
         _Rule(
             EntityType.API_KEY,
+            re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{16,}\b"),
+            lambda m, t: True,
+        ),
+        _Rule(
+            EntityType.API_KEY,
             re.compile(
                 r"(?i)\b(?:api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|"
                 r"secret|token|password|passwd|pwd)\b\s*[:=]\s*[\"']?"
                 r"([A-Za-z0-9_\-/+]{20,100})[\"']?"
             ),
             _validate_generic_secret,
+            group=1,
+        ),
+        # Labels in PDFs are commonly extracted as plain whitespace-separated
+        # text rather than `key: value`. These rules deliberately require a
+        # strong field label so values are not guessed from shape alone.
+        _Rule(
+            EntityType.DATE_OF_BIRTH,
+            re.compile(
+                r"(?i)\b(?:date\s+of\s+birth|dob)\b\s*[:=]?\s*"
+                r"((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+                r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+                r"Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.DRIVERS_LICENSE,
+            re.compile(
+                r"(?i)\b(?:driver(?:'s)?\s+licen[cs]e|dl\s*(?:number|no\.?))\b"
+                r"\s*[:=]?\s*([A-Z0-9][A-Z0-9-]{4,24})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.DEVICE_ID,
+            re.compile(
+                r"(?i)\bdevice\s+id\b\s*[:=]?\s*"
+                r"([0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-"
+                r"[0-9A-F](?:\s?[0-9A-F]){11})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.GOVERNMENT_ID,
+            re.compile(
+                r"(?i)\b(?:employee|payroll)\s+id\b\s*[:=]?\s*"
+                r"([A-Z0-9][A-Z0-9-]{3,24})"
+            ),
+            _validate_labeled_id,
+            group=1,
+        ),
+        _Rule(
+            EntityType.GOVERNMENT_ID,
+            re.compile(r"(?i)\bverification\s+pin\b\s*[:=]?\s*(\d{4,12})"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.MEDICAL_ID,
+            re.compile(
+                r"(?i)\b(?:member\s+id|group\s+number|medical\s+record\s+(?:number|no\.?))"
+                r"\s*[:=]?\s*([A-Z0-9][A-Z0-9-]{3,24})"
+            ),
+            _validate_labeled_id,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                r"(?i)\busername\b\s*[:=]\s*([^\s,;]{6,100})"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\busername\b\s+([^\s,;]{{6,100}}){_PDF_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                r"(?i)\b(?:temporary\s+password|password)\b\s*[:=]\s*[\"']"
+                r"([^\"'\r\n]{6,100})[\"']"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\b(?:temporary\s+password|password)\b\s*[:=]\s*"
+                rf"(?![\"']){_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_password,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\btemporary\s+password\b\s+"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_password,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"\bPassword\b\s+{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_password,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\bsecurity\s+answer\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\bsecurity\s+answer\b\s+"
+                rf"{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.API_KEY,
+            re.compile(r"(?i)\b(?:api\s+token|api\s+key)\b\s*[:=]?\s*([^\s,;]{16,100})"),
+            _validate_labeled_secret,
+            group=1,
+        ),
+        _Rule(
+            EntityType.FINANCIAL_INFORMATION,
+            re.compile(r"(?i)\b(?:expiration\s*/\s*cvv|cvv)\b\s*[:=]?\s*(\d{1,2}/\d{2,4}\s*/\s*\d{3,4}|\d{3,4})"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.FINANCIAL_INFORMATION,
+            re.compile(r"(?i)\bannual\s+income\b\s*[:=]?\s*(\$[\d,]+(?:\.\d{2})?)"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.FINANCIAL_INFORMATION,
+            re.compile(
+                r"(?i)\btax\s+filing\s+status\b\s*[:=]?\s*"
+                r"(single|married\s+filing\s+(?:jointly|separately)|head\s+of\s+household|widow(?:er)?)"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.STREET_NAME,
+            re.compile(
+                r"(?i)\b(\d{1,6}\s+(?:(?!(?:address|phone|ext|number|id)\b)[A-Z0-9.'-]+\s+){0,5}"
+                r"(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Boulevard|Blvd\.?|Lane|Ln\.?|"
+                r"Drive|Court|Ct\.?|Terrace|Way|Place|Pl\.?)(?![A-Za-z])"
+                r"(?:,?\s+(?:Apt\.?|Suite|Ste\.?|Unit|#)\s*[A-Z0-9-]+)?)"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(r"(?i)\bblood\s+type\b\s*[:=]?\s*((?:A|B|AB|O)\s+(?:positive|negative))"),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"(?i)\bhealth\s+plan\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"(?i)\bhealth\s+plan\b\s+{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"(?i)\bprimary\s+physician\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"(?i)\bprimary\s+physician\b\s+{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                r"(?i)\brecent\s+visit\b\s*[:=]?\s*"
+                r"((?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+                r"Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|"
+                r"Dec(?:ember)?)\s+\d{1,2},?\s+\d{4}|\d{1,2}[/-]\d{1,2}[/-]\d{2,4})"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"(?i)\b(?:clinic|condition|medication)\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"\b(?:Clinic|Condition|Medication)\b\s+"
+                rf"{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
             group=1,
         ),
         # --- PRIVATE_KEY -------------------------------------------------

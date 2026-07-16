@@ -165,6 +165,30 @@ def test_redact_fake_w2_removes_ssn_and_name(fixtures, tmp_path):
         redacted_doc.close()
 
 
+def test_redaction_does_not_delete_text_on_adjacent_tightly_led_line(tmp_path):
+    src = tmp_path / "tight-lines.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "Authorization note", fontsize=8, fontname="helv")
+    page.insert_text((72, 110), "Jordan authorize access", fontsize=8, fontname="helv")
+    doc.save(src)
+    doc.close()
+
+    extraction = PdfExtractor().extract(src)
+    span = _span(extraction.text, "Jordan", EntityType.GIVEN_NAME)
+    dst = tmp_path / "tight-lines.redacted.pdf"
+    redact_pdf(src, dst, [span], extraction)
+
+    out = pymupdf.open(dst)
+    try:
+        text = out[0].get_text()
+    finally:
+        out.close()
+    assert "Jordan" not in text
+    assert "Authorization note" in text
+    assert "authorize access" in text
+
+
 def test_redact_letter_scrubs_metadata_and_xmp(fixtures, tmp_path):
     extractor = PdfExtractor()
     src = fixtures["letter"]

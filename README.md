@@ -5,7 +5,8 @@
 call, writes a sanitized copy to a local cache, and points `Read` at that
 copy instead. The original file on disk is never touched. Detection is
 two-layer — deterministic regex+validator rules for structured PII (SSNs,
-credit cards, API keys, ...) plus a small local ML model ([Rampart][rampart])
+credit cards, API keys, and strongly labeled identity, credential, financial,
+and medical fields) plus a small local ML model ([Rampart][rampart])
 for context-dependent PII (names, addresses) — and everything runs on your
 machine; nothing is sent anywhere. **This is defense-in-depth, not a
 compliance guarantee.** No detector is 100%, coverage is `Read`-shaped (a

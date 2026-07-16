@@ -7,3 +7,4 @@ dist/
 tests/fixtures/generated/
 eval/generated/
 .venv/
+.DS_Store

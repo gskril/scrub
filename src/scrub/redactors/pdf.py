@@ -17,9 +17,13 @@ from ..config import Config
 from ..types import Extraction, ReportEntity, Span
 from .placeholders import assign_placeholders
 
-# Small padding (in PDF points) added around each word's bounding box so the
-# black fill fully covers antialiased glyph edges.
-REDACT_PAD = 1.0
+# A redaction rectangle only needs to intersect a glyph to remove that glyph.
+# Insetting is safer than padding: PDF word boxes on tightly-led lines can
+# overlap vertically, and an expanded rectangle can therefore delete text on
+# an adjacent line. The fill is applied after the intersecting glyphs are
+# removed, so there are no antialiased remnants to cover.
+REDACT_INSET_X = 0.5
+REDACT_INSET_Y = 2.0
 
 _BLACK = (0, 0, 0)
 
@@ -97,10 +101,10 @@ def redact_pdf(
 
         for wb in overlapping:
             rect = pymupdf.Rect(
-                wb.x0 - REDACT_PAD,
-                wb.y0 - REDACT_PAD,
-                wb.x1 + REDACT_PAD,
-                wb.y1 + REDACT_PAD,
+                wb.x0 + min(REDACT_INSET_X, (wb.x1 - wb.x0) / 4),
+                wb.y0 + min(REDACT_INSET_Y, (wb.y1 - wb.y0) / 4),
+                wb.x1 - min(REDACT_INSET_X, (wb.x1 - wb.x0) / 4),
+                wb.y1 - min(REDACT_INSET_Y, (wb.y1 - wb.y0) / 4),
             )
             page_rects.setdefault(wb.page, []).append(rect)
 

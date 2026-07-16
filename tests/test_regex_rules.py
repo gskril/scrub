@@ -205,6 +205,16 @@ def test_phone_nanp_dashed_with_country_code_positive():
     assert spans == ["+1-415-555-2671"]
 
 
+def test_phone_extension_is_included():
+    spans = texts_found("Work phone +1 (628) 555-0117 ext. 204", EntityType.PHONE)
+    assert spans == ["+1 (628) 555-0117 ext. 204"]
+
+
+def test_phone_extension_is_case_insensitive_and_can_be_longer():
+    spans = texts_found("Work phone +1 (628) 555-0117 Ext. 1234567", EntityType.PHONE)
+    assert spans == ["+1 (628) 555-0117 Ext. 1234567"]
+
+
 def test_phone_international_positive():
     spans = texts_found("reach us at +44 20 7946 0958", EntityType.PHONE)
     assert spans == ["+44 20 7946 0958"]
@@ -354,6 +364,122 @@ def test_api_key_generic_low_entropy_not_detected():
 
 def test_api_key_generic_no_assignment_context_not_detected():
     assert texts_found("just some text Zx91Qk3mPz88vBc2Lw77 wandering by", EntityType.API_KEY) == []
+
+
+def test_labeled_pdf_fields_are_detected_without_colon_separators():
+    text = (
+        "Date of birth February 14, 1987 Driver license D123-4567-8901 "
+        "Employee ID EMP-739184 Device ID 8F4C2A91-7B3D-4E10-A5C6-91D227E 4B830 "
+        "Temporary password Temp!Redact#2026 API token sk_test_51N8xQp7d3L2m9V4c6A1 "
+        "Verification PIN 739204"
+    )
+    spans = d.detect(text)
+    values = {s.text for s in spans}
+    assert {
+        "February 14, 1987",
+        "D123-4567-8901",
+        "EMP-739184",
+        "8F4C2A91-7B3D-4E10-A5C6-91D227E 4B830",
+        "Temp!Redact#2026",
+        "sk_test_51N8xQp7d3L2m9V4c6A1",
+        "739204",
+    } <= values
+
+
+def test_labeled_security_answer_is_detected_before_numbered_section():
+    values = texts_found(
+        "Security answer Blue Harbor 5. Medical and insurance information",
+        EntityType.CREDENTIAL,
+    )
+    assert values == ["Blue Harbor"]
+
+
+def test_labeled_security_answer_stops_at_general_following_field():
+    values = texts_found(
+        "Security answer Blue Harbor Email alice@example.com",
+        EntityType.CREDENTIAL,
+    )
+    assert values == ["Blue Harbor"]
+
+
+def test_explicit_multiword_and_punctuation_only_passwords_are_detected():
+    assert texts_found(
+        'Password: "correct horse battery staple"', EntityType.CREDENTIAL
+    ) == ["correct horse battery staple"]
+    assert texts_found("Temporary password: !!!!!!", EntityType.CREDENTIAL) == ["!!!!!!"]
+
+
+def test_delimiter_free_temporary_passphrase_is_detected_completely():
+    assert texts_found(
+        "Temporary password correct horse battery staple", EntityType.CREDENTIAL
+    ) == ["correct horse battery staple"]
+
+
+def test_numeric_labeled_medical_and_employee_ids_are_detected():
+    text = "Employee ID 739184 Member ID 123456789 Group number 551204"
+    spans = d.detect(text)
+    assert {(s.entity_type, s.text) for s in spans} >= {
+        (EntityType.GOVERNMENT_ID, "739184"),
+        (EntityType.MEDICAL_ID, "123456789"),
+        (EntityType.MEDICAL_ID, "551204"),
+    }
+
+
+def test_delimiter_free_field_words_in_prose_are_not_detected():
+    samples = (
+        "Password should contain eight characters.",
+        "Update your username requirements before release.",
+        "The clinic remains open on weekends.",
+        "Her condition improved after medication adjustment.",
+    )
+    for text in samples:
+        assert not {
+            s.entity_type
+            for s in d.detect(text)
+        } & {EntityType.CREDENTIAL, EntityType.HEALTH_INFORMATION}
+
+
+def test_labeled_financial_and_medical_values_are_detected():
+    text = (
+        "Expiration / CVV 12/29 / 123 Annual income $128,500 "
+        "Tax filing status Married filing jointly Health plan Fictional Health PPO "
+        "Member ID FHP-883920174 Group number GRP-551204 Primary physician Dr. Amara Chen "
+        "Medical record no. MRN-002948173 Blood type O positive Condition Type 2 diabetes "
+        "Medication Metformin 500 mg twice daily Recent visit June 3, 2026 "
+        "Clinic Bayview Family Medicine 6. Free-form case notes"
+    )
+    values = {s.text for s in d.detect(text)}
+    assert {
+        "12/29 / 123",
+        "$128,500",
+        "Married filing jointly",
+        "Fictional Health PPO",
+        "FHP-883920174",
+        "GRP-551204",
+        "Dr. Amara Chen",
+        "MRN-002948173",
+        "O positive",
+        "Type 2 diabetes",
+        "Metformin 500 mg twice daily",
+        "June 3, 2026",
+        "Bayview Family Medicine",
+    } <= values
+
+
+def test_structured_street_address_is_detected_deterministically():
+    values = texts_found(
+        "Office address 100 Market Street, Suite 1200 San Francisco, CA 94105",
+        EntityType.STREET_NAME,
+    )
+    assert values == ["100 Market Street, Suite 1200"]
+
+
+def test_street_address_does_not_consume_preceding_phone_extension_or_label():
+    values = texts_found(
+        "Work phone +1 (628) 555-0117 ext. 204 Office address 100 Market Street, Suite 1200",
+        EntityType.STREET_NAME,
+    )
+    assert values == ["100 Market Street, Suite 1200"]
 
 
 # --------------------------------------------------------------------------
