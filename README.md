@@ -24,8 +24,8 @@ details.
 - macOS or Linux only — the daemon communicates over a Unix domain socket
   (no Windows support without a named-pipe/TCP transport, which doesn't
   exist yet)
-- ~15 MB Rampart model, auto-downloaded from Hugging Face
-  (`nationaldesignstudio/rampart`) on first run and cached locally after that
+- ~15 MB Rampart model, installed explicitly from Hugging Face with
+  `scrub download`; scanning and redaction use only the local cached copy
 
 ## Development setup on macOS
 
@@ -109,14 +109,21 @@ Check that the command is available:
 
 ```bash
 scrub --help
+scrub download
 scrub scan somefile.txt
 python -m pytest
 ```
 
-On first run this downloads the Rampart model (~15 MB) into the Hugging
-Face cache; subsequent runs are instant. `scrub scan` only detects and
-prints what it found — it writes nothing. To actually produce a redacted
-copy:
+`scrub download` is the only command that contacts Hugging Face. It installs
+the pinned Rampart model (~15 MB) into the local Hugging Face cache. Run it
+once after installing or upgrading scrub. Functional commands never download
+or check for model updates: `scrub scan`, `scrub redact`, the daemon, and the
+hook resolve the model strictly from the local cache. If it is absent or
+incomplete, they fail with instructions to run `scrub download` rather than
+making a network request.
+
+`scrub scan` only detects and prints what it found — it writes nothing. To
+actually produce a redacted copy:
 
 ```bash
 scrub redact somefile.txt
