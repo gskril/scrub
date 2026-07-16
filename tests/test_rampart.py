@@ -1,14 +1,14 @@
 """Real-model tests for RampartDetector.
 
 The Rampart model is already cached locally at the pinned revision, so these
-run actual ONNX inference (no network download at test time — snapshot_download
-hits the cache). All PII is synthetic.
+run actual ONNX inference with cache-only loading. All PII is synthetic.
 """
 
 from __future__ import annotations
 
 import io
 import os
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +16,8 @@ from scrub.config import RAMPART_REPO, RAMPART_REVISION
 from scrub.detectors.rampart import (
     _MAX_PROGRESS_WIDTH,
     _CompactProgress,
+    _local_model_dir,
+    download_model,
     RampartDetector,
 )
 from scrub.types import EntityType
@@ -129,6 +131,32 @@ def test_pinned_revision_constants() -> None:
     # Guard against silent model drift.
     assert RAMPART_REPO == "nationaldesignstudio/rampart"
     assert RAMPART_REVISION == "b1993e4e68b082835b80ffc65acc03325ea2e501"
+
+
+def test_runtime_model_lookup_is_strictly_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_snapshot_download(*args, **kwargs):
+        calls.append((args, kwargs))
+        return str(Path(__file__).parents[1] / ".test-model")
+
+    monkeypatch.setattr("scrub.detectors.rampart.snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr("scrub.detectors.rampart._validate_model_dir", lambda path: path)
+    assert _local_model_dir().name == ".test-model"
+    assert calls[0][1]["local_files_only"] is True
+
+
+def test_explicit_download_is_network_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = []
+
+    def fake_snapshot_download(*args, **kwargs):
+        calls.append((args, kwargs))
+        return str(Path(__file__).parents[1] / ".test-model")
+
+    monkeypatch.setattr("scrub.detectors.rampart.snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr("scrub.detectors.rampart._validate_model_dir", lambda path: path)
+    assert download_model().name == ".test-model"
+    assert "local_files_only" not in calls[0][1]
 
 
 def test_model_progress_is_compact_and_transient(monkeypatch: pytest.MonkeyPatch) -> None:

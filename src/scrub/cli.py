@@ -16,14 +16,64 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from typer.core import TyperCommand, TyperGroup
 
 from .config import Config
 from .pipeline import Pipeline
 
-app = typer.Typer(add_completion=False, no_args_is_help=True, help="scrub — local PII redactor")
+
+def _help_on_empty(args: list[str]) -> list[str]:
+    """Route a truly bare invocation through Click's normal help option."""
+    return ["--help"] if not args else args
+
+
+class HelpOnEmptyCommand(TyperCommand):
+    """A command that shows help (exit 0) when invoked without arguments."""
+
+    def parse_args(self, ctx, args):  # noqa: ANN001
+        return super().parse_args(ctx, _help_on_empty(args))
+
+
+class HelpOnEmptyGroup(TyperGroup):
+    """A command group that shows help (exit 0) when invoked bare."""
+
+    def parse_args(self, ctx, args):  # noqa: ANN001
+        return super().parse_args(ctx, _help_on_empty(args))
+
+
+app = typer.Typer(
+    add_completion=False,
+    cls=HelpOnEmptyGroup,
+    help="scrub — local PII redactor",
+)
+
+
+def _model_error(exc: Exception) -> None:
+    """Print the actionable offline-model error without a traceback."""
+    from .detectors.rampart import ModelNotDownloadedError
+
+    if isinstance(exc, ModelNotDownloadedError):
+        typer.echo(f"scrub: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    raise exc
 
 
 @app.command()
+def download() -> None:
+    """Download the pinned local ML model required by scan and redact."""
+    from .detectors.rampart import download_model
+
+    typer.echo("scrub: downloading Rampart model...")
+    try:
+        model_dir = download_model()
+    except Exception as exc:  # network/auth/cache errors vary by hub version
+        typer.echo(f"scrub: model download failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"scrub: Rampart model ready -> {model_dir}")
+    raise typer.Exit(code=0)
+
+
+@app.command(cls=HelpOnEmptyCommand)
 def redact(
     file: Path = typer.Argument(..., exists=True, readable=True, help="File to redact"),
     out: Optional[Path] = typer.Option(
@@ -36,7 +86,10 @@ def redact(
     """Redact PII in FILE, writing a sanitized copy (cache dir, or --out)."""
     config = Config.load()
     pipeline = Pipeline.default(config)
-    result = pipeline.redact_file(file)
+    try:
+        result = pipeline.redact_file(file)
+    except Exception as exc:
+        _model_error(exc)
 
     display_path = result.redacted_path
     if out is not None and result.redacted_path is not None:
@@ -75,14 +128,17 @@ def redact(
     raise typer.Exit(code=0)
 
 
-@app.command()
+@app.command(cls=HelpOnEmptyCommand)
 def scan(
     file: Path = typer.Argument(..., exists=True, readable=True, help="File to scan"),
 ) -> None:
     """Detect PII in FILE without writing anything."""
     config = Config.load()
     pipeline = Pipeline.default(config)
-    spans = pipeline.scan(file)
+    try:
+        spans = pipeline.scan(file)
+    except Exception as exc:
+        _model_error(exc)
 
     if not spans:
         typer.echo(f"scrub: no PII detected in {file}")
@@ -140,7 +196,11 @@ def uninstall_hook_cmd(
 
 # --------------------------------------------------------------- daemon control
 
-daemon_app = typer.Typer(add_completion=False, help="Manage the scrub daemon")
+daemon_app = typer.Typer(
+    add_completion=False,
+    cls=HelpOnEmptyGroup,
+    help="Manage the scrub daemon",
+)
 app.add_typer(daemon_app, name="daemon")
 
 

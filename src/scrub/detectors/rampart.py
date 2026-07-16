@@ -13,8 +13,10 @@ BIO token labels for 17 PII entity types. We:
      (adjacent merge, single-token bridge merge, word-boundary expansion).
 
 No hardcoded label list: `id2label` is read from the repo's config.json.
-The model is loaded lazily on the first detect() or via warmup() (the daemon
-calls warmup() so the first real request is fast).
+The model is installed explicitly by ``scrub download``. Functional commands
+load it from the local Hugging Face cache only, so scanning and redaction never
+need network access. The model is loaded lazily on the first detect() or via
+warmup() (the daemon calls warmup() so the first real request is fast).
 """
 
 from __future__ import annotations
@@ -57,6 +59,59 @@ _MODEL_FILES = (
     "tokenizer.json",
     "onnx/model_q4.onnx",
 )
+
+
+class ModelNotDownloadedError(RuntimeError):
+    """The pinned Rampart snapshot is not complete in the local cache."""
+
+
+def _validate_model_dir(model_dir: Path) -> Path:
+    missing = [name for name in _MODEL_FILES if not (model_dir / name).is_file()]
+    if missing:
+        raise ModelNotDownloadedError(
+            "Rampart model is incomplete; run `scrub download` while online "
+            f"(missing: {', '.join(missing)})"
+        )
+    return model_dir
+
+
+def download_model() -> Path:
+    """Download the pinned Rampart assets required by scrub.
+
+    This is the only network-enabled Hugging Face operation in scrub. Runtime
+    detection deliberately uses ``local_files_only=True`` instead.
+    """
+    return _validate_model_dir(
+        Path(
+            snapshot_download(
+                RAMPART_REPO,
+                revision=RAMPART_REVISION,
+                allow_patterns=_MODEL_FILES,
+                tqdm_class=_CompactProgress,
+            )
+        )
+    )
+
+
+def _local_model_dir() -> Path:
+    """Resolve the installed model without making a network request."""
+    try:
+        return _validate_model_dir(
+            Path(
+                snapshot_download(
+                    RAMPART_REPO,
+                    revision=RAMPART_REVISION,
+                    allow_patterns=_MODEL_FILES,
+                    local_files_only=True,
+                )
+            )
+        )
+    except ModelNotDownloadedError:
+        raise
+    except Exception as exc:
+        raise ModelNotDownloadedError(
+            "Rampart model is not installed; run `scrub download` while online first"
+        ) from exc
 
 
 class _CompactProgress(hf_tqdm):
@@ -111,14 +166,7 @@ class RampartDetector:
         """Load tokenizer, ONNX session and label map. Idempotent."""
         if self._session is not None:
             return
-        model_dir = Path(
-            snapshot_download(
-                RAMPART_REPO,
-                revision=RAMPART_REVISION,
-                allow_patterns=_MODEL_FILES,
-                tqdm_class=_CompactProgress,
-            )
-        )
+        model_dir = _local_model_dir()
 
         self._tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
         # We do our own chunking; make sure the tokenizer never truncates/pads.

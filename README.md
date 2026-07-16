@@ -24,8 +24,8 @@ details.
 - macOS or Linux only — the daemon communicates over a Unix domain socket
   (no Windows support without a named-pipe/TCP transport, which doesn't
   exist yet)
-- ~15 MB Rampart model, auto-downloaded from Hugging Face
-  (`nationaldesignstudio/rampart`) on first run and cached locally after that
+- ~15 MB Rampart model, installed explicitly from Hugging Face with
+  `scrub download`; scanning and redaction use only the local cached copy
 
 ## Development setup on macOS
 
@@ -103,20 +103,58 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
+## Make the development CLI available everywhere with pipx
+
+If you want to run `scrub` and `scrub-hook` from any directory without
+activating the project's `.venv`, install the repository with
+[pipx][pipx]. pipx keeps the application in its own managed environment and
+puts its commands on your `PATH`:
+
+```bash
+# macOS
+brew install pipx
+pipx ensurepath
+
+cd /path/to/scrub
+pipx install --editable .
+```
+
+Open a new shell after `pipx ensurepath` (or run `exec zsh`). The editable
+install points back to this checkout, so changes under `src/scrub/` take
+effect immediately. Reinstall it after changing dependencies or console
+script entry points:
+
+```bash
+pipx reinstall scrub
+```
+
+Keep the project `.venv` for running the development tools and test suite;
+the pipx environment is for making the application commands available
+machine-wide.
+
+[pipx]: https://pipx.pypa.io/stable/
+
 ## Verify the installation
 
 Check that the command is available:
 
 ```bash
 scrub --help
+scrub download
 scrub scan somefile.txt
 python -m pytest
 ```
 
-On first run this downloads the Rampart model (~15 MB) into the Hugging
-Face cache; subsequent runs are instant. `scrub scan` only detects and
-prints what it found — it writes nothing. To actually produce a redacted
-copy:
+`scrub download` is the only command that contacts Hugging Face. It installs
+the pinned Rampart model (~15 MB) into the local Hugging Face cache. Run it
+once after installing or upgrading scrub. Functional commands never download
+or check for model updates: `scrub scan`, `scrub redact`, the daemon, and the
+hook resolve the model strictly from the local cache. If it is absent or
+incomplete, they fail with instructions to run `scrub download` rather than
+making a network request.
+
+`scrub scan` only detects and prints what it found — it writes nothing. To
+actually produce a redacted copy:
 
 ```bash
 scrub redact somefile.txt
@@ -297,4 +335,10 @@ scrub uninstall-hook --user      # or --project, matching how you installed it
 deactivate
 rm -rf .venv
 rm -rf ~/.cache/scrub            # redacted-copy cache + daemon socket/pidfile
+```
+
+If you installed the editable CLI with pipx, remove it separately:
+
+```bash
+pipx uninstall scrub
 ```

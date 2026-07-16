@@ -24,8 +24,10 @@ flagging it in your final report.
     correct char offsets. An SSN was misclassified as B-PHONE at ~0.7 conf —
     this is WHY the regex layer runs first and masks its hits with sentinels
     before the model pass (Rampart upstream does the same).
-- `huggingface_hub.snapshot_download(RAMPART_REPO, revision=RAMPART_REVISION)`
-  returns the local path; the model is already in the HF cache here.
+- `scrub download` uses
+  `huggingface_hub.snapshot_download(RAMPART_REPO, revision=RAMPART_REVISION)`
+  to install the pinned model. Runtime commands pass `local_files_only=True`
+  and fail with an actionable error if the snapshot is missing or incomplete.
 
 ## Contracts (already written — build against, don't redefine)
 
@@ -77,9 +79,9 @@ flagging it in your final report.
 
 ## Testing rules
 
-- Every phase ships pytest tests that run offline except Rampart tests
-  (model already cached locally — do not download at test time; use
-  snapshot_download with the pinned revision, it hits cache).
+- Every phase ships pytest tests that run offline. Rampart tests require the
+  pinned model to have been installed by `scrub download`; runtime model
+  loading is cache-only and never falls back to a network request.
 - All PII in fixtures is synthetic. Use these known-fake values where
   possible: SSN 458-02-6841 (invalid area is fine to synthesize), names like
   "Maria Garcia", card 4111 1111 1111 1111, routing 021000021.
