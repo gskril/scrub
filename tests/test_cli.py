@@ -50,7 +50,9 @@ def test_every_help_command_succeeds(args: list[str]) -> None:
     ],
 )
 def test_bare_file_commands_show_help(command: str, options: list[str]) -> None:
-    result = runner.invoke(app, [command])
+    # Fix the render width so Rich doesn't elide option names based on the
+    # ambient CI terminal width.
+    result = runner.invoke(app, [command], terminal_width=120)
 
     assert result.exit_code == 0
     assert "Usage:" in result.output

@@ -31,5 +31,10 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -e ".[dev]"
 
+      - name: Download Rampart model
+        run: scrub download
+
       - name: Run tests
         run: python -m pytest
+        env:
+          HF_HUB_OFFLINE: "1"
