@@ -7,10 +7,17 @@ hits the cache). All PII is synthetic.
 
 from __future__ import annotations
 
+import io
+import os
+
 import pytest
 
 from scrub.config import RAMPART_REPO, RAMPART_REVISION
-from scrub.detectors.rampart import RampartDetector
+from scrub.detectors.rampart import (
+    _MAX_PROGRESS_WIDTH,
+    _CompactProgress,
+    RampartDetector,
+)
 from scrub.types import EntityType
 
 
@@ -122,3 +129,31 @@ def test_pinned_revision_constants() -> None:
     # Guard against silent model drift.
     assert RAMPART_REPO == "nationaldesignstudio/rampart"
     assert RAMPART_REVISION == "b1993e4e68b082835b80ffc65acc03325ea2e501"
+
+
+def test_model_progress_is_compact_and_transient(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "scrub.detectors.rampart.shutil.get_terminal_size",
+        lambda fallback: os.terminal_size((120, 24)),
+    )
+    progress = _CompactProgress(
+        total=3,
+        desc="Fetching 3 files",
+        file=io.StringIO(),
+    )
+    try:
+        assert progress.ncols == _MAX_PROGRESS_WIDTH
+        assert progress.dynamic_ncols is False
+        assert progress.leave is False
+        assert progress.disable is False
+    finally:
+        progress.close()
+
+
+@pytest.mark.parametrize("desc", ["Downloading bytes", "Reconstructing (incomplete total...)"])
+def test_model_progress_hides_duplicate_byte_rows(desc: str) -> None:
+    progress = _CompactProgress(total=1, desc=desc, file=io.StringIO())
+    try:
+        assert progress.disable is True
+    finally:
+        progress.close()
