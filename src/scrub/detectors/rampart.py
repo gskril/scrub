@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
 from huggingface_hub import snapshot_download
+from huggingface_hub.utils import tqdm as hf_tqdm
 from tokenizers import Tokenizer
 
 from ..config import RAMPART_REPO, RAMPART_REVISION, Config
@@ -41,6 +43,37 @@ _OVERLAP = _CONTENT_WINDOW - _STRIDE  # 64
 # Characters that may sit between two same-type spans and still be treated as
 # a single entity during the "adjacent merge" repair step.
 _JOINERS = frozenset(" \t\n\r-'’")
+
+# Keep first-run model setup readable in narrow terminals. Newer versions of
+# huggingface_hub otherwise render three full-width progress bars for a
+# snapshot download (file count, transfer bytes, and reconstruction bytes).
+_MAX_PROGRESS_WIDTH = 64
+_HIDDEN_PROGRESS_LABELS = (
+    "Downloading bytes",
+    "Reconstructing",
+)
+_MODEL_FILES = (
+    "config.json",
+    "tokenizer.json",
+    "onnx/model_q4.onnx",
+)
+
+
+class _CompactProgress(hf_tqdm):
+    """A single, short-lived progress row for the first model download."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        columns = shutil.get_terminal_size(fallback=(_MAX_PROGRESS_WIDTH, 24)).columns
+        kwargs["ncols"] = min(columns, _MAX_PROGRESS_WIDTH)
+        kwargs["dynamic_ncols"] = False
+        kwargs["leave"] = False
+
+        # The aggregate byte bars added by huggingface_hub duplicate the useful
+        # file progress and are the source of the multi-line, wrapped output.
+        desc = str(kwargs.get("desc", ""))
+        if desc.startswith(_HIDDEN_PROGRESS_LABELS):
+            kwargs["disable"] = True
+        super().__init__(*args, **kwargs)
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -78,7 +111,14 @@ class RampartDetector:
         """Load tokenizer, ONNX session and label map. Idempotent."""
         if self._session is not None:
             return
-        model_dir = Path(snapshot_download(RAMPART_REPO, revision=RAMPART_REVISION))
+        model_dir = Path(
+            snapshot_download(
+                RAMPART_REPO,
+                revision=RAMPART_REVISION,
+                allow_patterns=_MODEL_FILES,
+                tqdm_class=_CompactProgress,
+            )
+        )
 
         self._tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
         # We do our own chunking; make sure the tokenizer never truncates/pads.
