@@ -210,6 +210,11 @@ def test_phone_extension_is_included():
     assert spans == ["+1 (628) 555-0117 ext. 204"]
 
 
+def test_phone_extension_is_case_insensitive_and_can_be_longer():
+    spans = texts_found("Work phone +1 (628) 555-0117 Ext. 1234567", EntityType.PHONE)
+    assert spans == ["+1 (628) 555-0117 Ext. 1234567"]
+
+
 def test_phone_international_positive():
     spans = texts_found("reach us at +44 20 7946 0958", EntityType.PHONE)
     assert spans == ["+44 20 7946 0958"]
@@ -387,6 +392,51 @@ def test_labeled_security_answer_is_detected_before_numbered_section():
         EntityType.CREDENTIAL,
     )
     assert values == ["Blue Harbor"]
+
+
+def test_labeled_security_answer_stops_at_general_following_field():
+    values = texts_found(
+        "Security answer Blue Harbor Email alice@example.com",
+        EntityType.CREDENTIAL,
+    )
+    assert values == ["Blue Harbor"]
+
+
+def test_explicit_multiword_and_punctuation_only_passwords_are_detected():
+    assert texts_found(
+        'Password: "correct horse battery staple"', EntityType.CREDENTIAL
+    ) == ["correct horse battery staple"]
+    assert texts_found("Temporary password: !!!!!!", EntityType.CREDENTIAL) == ["!!!!!!"]
+
+
+def test_delimiter_free_temporary_passphrase_is_detected_completely():
+    assert texts_found(
+        "Temporary password correct horse battery staple", EntityType.CREDENTIAL
+    ) == ["correct horse battery staple"]
+
+
+def test_numeric_labeled_medical_and_employee_ids_are_detected():
+    text = "Employee ID 739184 Member ID 123456789 Group number 551204"
+    spans = d.detect(text)
+    assert {(s.entity_type, s.text) for s in spans} >= {
+        (EntityType.GOVERNMENT_ID, "739184"),
+        (EntityType.MEDICAL_ID, "123456789"),
+        (EntityType.MEDICAL_ID, "551204"),
+    }
+
+
+def test_delimiter_free_field_words_in_prose_are_not_detected():
+    samples = (
+        "Password should contain eight characters.",
+        "Update your username requirements before release.",
+        "The clinic remains open on weekends.",
+        "Her condition improved after medication adjustment.",
+    )
+    for text in samples:
+        assert not {
+            s.entity_type
+            for s in d.detect(text)
+        } & {EntityType.CREDENTIAL, EntityType.HEALTH_INFORMATION}
 
 
 def test_labeled_financial_and_medical_values_are_detected():

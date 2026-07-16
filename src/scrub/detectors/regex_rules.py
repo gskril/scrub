@@ -185,7 +185,7 @@ _NANP_RE = re.compile(r"^\+?1?\D*([2-9]\d{2})\D*([2-9]\d{2})\D*(\d{4})$")
 
 
 def _validate_phone_nanp(m: re.Match, text: str) -> bool:
-    candidate = re.sub(r"(?i)\s*(?:ext\.?|x)\s*\d{1,6}$", "", m.group(0))
+    candidate = re.sub(r"(?i)\s*(?:ext\.?|x)\s*\d{1,10}$", "", m.group(0))
     return bool(_NANP_RE.match(candidate))
 
 
@@ -242,6 +242,16 @@ def _validate_labeled_credential(m: re.Match, text: str) -> bool:
     return len(value) >= 6 and any(c.isalnum() for c in value)
 
 
+def _validate_labeled_password(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return len(value) >= 6 and any(not c.isspace() for c in value)
+
+
+def _validate_labeled_id(m: re.Match, text: str) -> bool:
+    value = m.group(1)
+    return 4 <= len(value) <= 25 and any(c.isdigit() for c in value)
+
+
 def _validate_labeled_secret(m: re.Match, text: str) -> bool:
     value = m.group(1)
     return len(value) >= 16 and _shannon_entropy(value) >= 3.0
@@ -287,6 +297,30 @@ class _Rule:
     group: int = 0  # which regex group's span to use (0 = whole match)
 
 
+# PyMuPDF joins every word on a page with spaces, so delimiter-free field
+# values need to stop at the next recognizable field label rather than at a
+# newline. Keep this list restricted to strong document labels. In particular,
+# delimiter-free free-form rules below require one of these boundaries; they
+# do not treat end-of-string as sufficient, which avoids matching ordinary
+# prose such as "The clinic remains open".
+_PDF_FIELD_LABEL_RE_STR = (
+    r"(?:full\s+legal\s+name|date\s+of\s+birth|ssn|passport\s+no\.?|"
+    r"driver(?:'s)?\s+licen[cs]e|issuing\s+state|mother's\s+maiden\s+name|"
+    r"(?:employee|payroll)\s+id|home\s+address|(?:personal\s+|work\s+)?email|mobile\s+phone|"
+    r"emergency\s+contact|ip\s+address|device\s+id|bank|account\s+holder|"
+    r"routing\s+number|account\s+number|credit\s+card|expiration\s*/\s*cvv|"
+    r"annual\s+income|tax\s+filing\s+status|employer|manager|"
+    r"work\s+phone|office\s+address|username|temporary\s+password|password|"
+    r"api\s+(?:token|key)|security\s+answer|health\s+plan|member\s+id|"
+    r"group\s+number|primary\s+physician|medical\s+record\s+(?:number|no\.?)|"
+    r"blood\s+type|condition|medication|recent\s+visit|clinic|"
+    r"verification\s+pin|\d+\.\s+[A-Za-z])"
+)
+_PDF_FIELD_END_RE_STR = rf"(?=\s+(?i:{_PDF_FIELD_LABEL_RE_STR})|[\r\n]+)"
+_EXPLICIT_FIELD_END_RE_STR = rf"(?=\s+(?i:{_PDF_FIELD_LABEL_RE_STR})|[\r\n]+|$)"
+_FREEFORM_VALUE_RE_STR = r"(\S(?:.{0,98}?\S)?)"
+
+
 def _build_rules() -> list[_Rule]:
     return [
         # --- SSN ---------------------------------------------------------
@@ -320,7 +354,8 @@ def _build_rules() -> list[_Rule]:
             EntityType.PHONE,
             re.compile(
                 r"(?<!\d)(?:\+?1[\s.-]?)?\(?[2-9]\d{2}\)?[\s.-]?[2-9]\d{2}[\s.-]?\d{4}"
-                r"(?:\s*(?:ext\.?|x)\s*\d{1,6})?(?!\d)"
+                r"(?:\s*(?:ext\.?|x)\s*\d{1,10})?(?!\d)",
+                re.IGNORECASE,
             ),
             _validate_phone_nanp,
         ),
@@ -422,9 +457,9 @@ def _build_rules() -> list[_Rule]:
             EntityType.GOVERNMENT_ID,
             re.compile(
                 r"(?i)\b(?:employee|payroll)\s+id\b\s*[:=]?\s*"
-                r"([A-Z]{2,5}-[A-Z0-9-]{4,20})"
+                r"([A-Z0-9][A-Z0-9-]{3,24})"
             ),
-            lambda m, t: True,
+            _validate_labeled_id,
             group=1,
         ),
         _Rule(
@@ -437,16 +472,15 @@ def _build_rules() -> list[_Rule]:
             EntityType.MEDICAL_ID,
             re.compile(
                 r"(?i)\b(?:member\s+id|group\s+number|medical\s+record\s+(?:number|no\.?))"
-                r"\s*[:=]?\s*([A-Z]{2,5}-[A-Z0-9-]{4,20})"
+                r"\s*[:=]?\s*([A-Z0-9][A-Z0-9-]{3,24})"
             ),
-            lambda m, t: True,
+            _validate_labeled_id,
             group=1,
         ),
         _Rule(
             EntityType.CREDENTIAL,
             re.compile(
-                r"(?i)\b(?:temporary\s+password|password|username)\b"
-                r"\s*[:=]?\s*([^\s,;]{6,100})"
+                r"(?i)\busername\b\s*[:=]\s*([^\s,;]{6,100})"
             ),
             _validate_labeled_credential,
             group=1,
@@ -454,8 +488,60 @@ def _build_rules() -> list[_Rule]:
         _Rule(
             EntityType.CREDENTIAL,
             re.compile(
-                r"(?i)\bsecurity\s+answer\b\s*[:=]?\s*"
-                r"([A-Za-z][A-Za-z' -]{2,60}?)(?=\s+(?:\d+\.|medical\b|health\s+plan\b)|[\r\n]+|$)"
+                rf"(?i)\busername\b\s+([^\s,;]{{6,100}}){_PDF_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                r"(?i)\b(?:temporary\s+password|password)\b\s*[:=]\s*[\"']"
+                r"([^\"'\r\n]{6,100})[\"']"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\b(?:temporary\s+password|password)\b\s*[:=]\s*"
+                rf"(?![\"']){_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_password,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\btemporary\s+password\b\s+"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_password,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"\bPassword\b\s+{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_password,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\bsecurity\s+answer\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            _validate_labeled_credential,
+            group=1,
+        ),
+        _Rule(
+            EntityType.CREDENTIAL,
+            re.compile(
+                rf"(?i)\bsecurity\s+answer\b\s+"
+                rf"{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
             ),
             _validate_labeled_credential,
             group=1,
@@ -507,8 +593,8 @@ def _build_rules() -> list[_Rule]:
         _Rule(
             EntityType.HEALTH_INFORMATION,
             re.compile(
-                r"(?i)\bhealth\s+plan\b\s*[:=]?\s*(.+?)"
-                r"(?=\s+member\s+id\b|[\r\n]+|$)"
+                rf"(?i)\bhealth\s+plan\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
             ),
             lambda m, t: True,
             group=1,
@@ -516,8 +602,24 @@ def _build_rules() -> list[_Rule]:
         _Rule(
             EntityType.HEALTH_INFORMATION,
             re.compile(
-                r"(?i)\bprimary\s+physician\b\s*[:=]?\s*(.+?)"
-                r"(?=\s+medical\s+record\b|[\r\n]+|$)"
+                rf"(?i)\bhealth\s+plan\b\s+{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"(?i)\bprimary\s+physician\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
+            ),
+            lambda m, t: True,
+            group=1,
+        ),
+        _Rule(
+            EntityType.HEALTH_INFORMATION,
+            re.compile(
+                rf"(?i)\bprimary\s+physician\b\s+{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
             ),
             lambda m, t: True,
             group=1,
@@ -536,21 +638,18 @@ def _build_rules() -> list[_Rule]:
         _Rule(
             EntityType.HEALTH_INFORMATION,
             re.compile(
-                r"(?i)\bclinic\b\s*[:=]?\s*(.+?)"
-                r"(?=\s+\d+\.\s+[A-Za-z]|[\r\n]+|$)"
+                rf"(?i)\b(?:clinic|condition|medication)\b\s*[:=]\s*"
+                rf"{_FREEFORM_VALUE_RE_STR}{_EXPLICIT_FIELD_END_RE_STR}"
             ),
             lambda m, t: True,
             group=1,
         ),
         _Rule(
             EntityType.HEALTH_INFORMATION,
-            re.compile(r"(?i)\bcondition\b\s*[:=]?\s*(.+?)(?=\s+medication\b|[\r\n]+|$)"),
-            lambda m, t: True,
-            group=1,
-        ),
-        _Rule(
-            EntityType.HEALTH_INFORMATION,
-            re.compile(r"(?i)\bmedication\b\s*[:=]?\s*(.+?)(?=\s+recent\s+visit\b|[\r\n]+|$)"),
+            re.compile(
+                rf"\b(?:Clinic|Condition|Medication)\b\s+"
+                rf"{_FREEFORM_VALUE_RE_STR}{_PDF_FIELD_END_RE_STR}"
+            ),
             lambda m, t: True,
             group=1,
         ),
