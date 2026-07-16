@@ -103,6 +103,37 @@ source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
 
+## Make the development CLI available everywhere with pipx
+
+If you want to run `scrub` and `scrub-hook` from any directory without
+activating the project's `.venv`, install the repository with
+[pipx][pipx]. pipx keeps the application in its own managed environment and
+puts its commands on your `PATH`:
+
+```bash
+# macOS
+brew install pipx
+pipx ensurepath
+
+cd /path/to/scrub
+pipx install --editable .
+```
+
+Open a new shell after `pipx ensurepath` (or run `exec zsh`). The editable
+install points back to this checkout, so changes under `src/scrub/` take
+effect immediately. Reinstall it after changing dependencies or console
+script entry points:
+
+```bash
+pipx reinstall scrub
+```
+
+Keep the project `.venv` for running the development tools and test suite;
+the pipx environment is for making the application commands available
+machine-wide.
+
+[pipx]: https://pipx.pypa.io/stable/
+
 ## Verify the installation
 
 Check that the command is available:
@@ -304,4 +335,10 @@ scrub uninstall-hook --user      # or --project, matching how you installed it
 deactivate
 rm -rf .venv
 rm -rf ~/.cache/scrub            # redacted-copy cache + daemon socket/pidfile
+```
+
+If you installed the editable CLI with pipx, remove it separately:
+
+```bash
+pipx uninstall scrub
 ```
