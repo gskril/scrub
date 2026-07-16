@@ -95,8 +95,10 @@ def _decide(data: dict, config: Config) -> dict:
         return _allow()
 
     redacted_path = resp.get("redacted_path")
-    if not redacted_path:
-        return _allow()
+    if not redacted_path or not Path(redacted_path).is_file():
+        # found > 0 but no usable redacted copy: this is a daemon bug, and
+        # allowing the original through here would be a silent fail-open.
+        raise RuntimeError("daemon reported findings but no redacted copy")
 
     updated_input = {**tool_input, "file_path": redacted_path}
     return _allow(updated_input)
