@@ -34,9 +34,20 @@ from .client import ensure_daemon, redact_text_request
 from .config import Config
 
 _EVENT = "PostToolUse"
+# Outputs larger than this are withheld (fail-closed) rather than scrubbed: a
+# very large redaction could exceed the hook timeout, and a timed-out hook
+# emits nothing — which Claude Code treats as passthrough, i.e. a fail-OPEN
+# leak. Capping keeps us comfortably under the timeout so we never leak that
+# way. Normal tool output is far below this.
+_MAX_SCRUB_CHARS = 200_000
 _WITHHELD = (
     "[scrub: could not redact this output, so it was withheld. Fix the scrub "
     "daemon or set fail_mode='open' in ~/.config/scrub/config.toml]"
+)
+_TOO_LARGE = (
+    "[scrub: output too large to redact within the hook's time budget, so it "
+    "was withheld to avoid leaking un-redacted content. Narrow the command "
+    "(head/grep/limit) and try again.]"
 )
 
 
@@ -67,6 +78,23 @@ def _scrub(config: Config, text: str) -> tuple[str, int]:
     return resp.get("redacted", text), int(resp.get("found", 0))
 
 
+def _withhold(data: dict, message: str) -> dict | None:
+    """Build an updatedToolOutput whose text fields are replaced by `message`,
+    hiding the original. Returns None if the shape isn't one we handle."""
+    resp = data.get("tool_response")
+    if not isinstance(resp, dict):
+        return None
+    updated = copy.deepcopy(resp)
+    if data.get("tool_name") == "Bash":
+        updated["stdout"] = message
+        updated["stderr"] = ""
+    elif data.get("tool_name") == "Read" and isinstance(updated.get("file"), dict):
+        updated["file"]["content"] = message
+    else:
+        return None
+    return updated
+
+
 def _decide(data: dict, config: Config) -> dict | None:
     tool_name = data.get("tool_name")
     resp = data.get("tool_response")
@@ -74,8 +102,13 @@ def _decide(data: dict, config: Config) -> dict | None:
         return None
 
     if tool_name == "Bash":
-        out, found_out = _scrub(config, resp.get("stdout") or "")
-        err, found_err = _scrub(config, resp.get("stderr") or "")
+        stdout, stderr = resp.get("stdout") or "", resp.get("stderr") or ""
+        # Oversize -> withhold, ALWAYS (never honour fail-open here): a huge
+        # redaction risks a hook timeout, which would silently fail open.
+        if len(stdout) + len(stderr) > _MAX_SCRUB_CHARS:
+            return _withhold(data, _TOO_LARGE)
+        out, found_out = _scrub(config, stdout)
+        err, found_err = _scrub(config, stderr)
         if found_out == 0 and found_err == 0:
             return None
         updated = copy.deepcopy(resp)
@@ -87,7 +120,10 @@ def _decide(data: dict, config: Config) -> dict | None:
         file_obj = resp.get("file")
         if not isinstance(file_obj, dict) or resp.get("type") != "text":
             return None  # non-text Read (image/notebook) — not our shape
-        redacted, found = _scrub(config, file_obj.get("content") or "")
+        content = file_obj.get("content") or ""
+        if len(content) > _MAX_SCRUB_CHARS:
+            return _withhold(data, _TOO_LARGE)
+        redacted, found = _scrub(config, content)
         if found == 0:
             return None
         updated = copy.deepcopy(resp)
@@ -103,18 +139,7 @@ def _fail(fail_mode: str, data: dict, reason: str) -> dict | None:
     if fail_mode == "open":
         print(f"scrub: {reason} (fail-open, passing original through)", file=sys.stderr)
         return None
-    resp = data.get("tool_response")
-    if not isinstance(resp, dict):
-        return None
-    updated = copy.deepcopy(resp)
-    if data.get("tool_name") == "Bash":
-        updated["stdout"] = _WITHHELD
-        updated["stderr"] = ""
-    elif data.get("tool_name") == "Read" and isinstance(updated.get("file"), dict):
-        updated["file"]["content"] = _WITHHELD
-    else:
-        return None
-    return updated
+    return _withhold(data, _WITHHELD)
 
 
 def main() -> None:
