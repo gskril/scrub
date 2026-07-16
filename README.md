@@ -26,21 +26,90 @@ details.
 - ~15 MB Rampart model, auto-downloaded from Hugging Face
   (`nationaldesignstudio/rampart`) on first run and cached locally after that
 
-## Install
+## Development setup on macOS
+
+Modern Homebrew Python installations are [externally managed][pep-668], so a
+direct `pip install .` is intentionally blocked. Do not use
+`--break-system-packages`. Because this repository is an active development
+project, use a virtual environment and an editable install instead.
+
+### If you already have Python
+
+Check the version you already have:
+
+```bash
+python3 --version
+```
+
+If that reports Python 3.11 or newer, use it directly:
 
 ```bash
 git clone <this-repo-url> scrub
 cd scrub
-pip install .
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 ```
 
-This installs two console scripts: `scrub` (CLI) and `scrub-hook` (the
-Claude Code hook entry point — you won't normally invoke this one directly).
+If `python3` is not found or reports a version older than 3.11, follow the next
+section instead.
 
-Verify it works:
+### If you need Python 3.11+
+
+Install Python 3.11 with [Homebrew][homebrew]. If `brew` is not installed,
+install Homebrew first from [brew.sh][homebrew].
 
 ```bash
+brew install python@3.11
+git clone <this-repo-url> scrub
+cd scrub
+"$(brew --prefix python@3.11)/bin/python3.11" -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+The `brew --prefix` expression locates Homebrew correctly on both Apple
+Silicon and Intel Macs.
+
+### Working in the project
+
+The editable install means source changes take effect immediately without
+reinstalling the package. It provides two commands while the environment is
+active: `scrub` (CLI) and `scrub-hook` (the Claude Code hook entry point).
+
+Activate the environment whenever you open a new Terminal window to work on
+the project:
+
+```bash
+cd /path/to/scrub
+source .venv/bin/activate
+```
+
+The Claude Code hook stores the absolute path to `.venv/bin/scrub-hook`, so
+keep this virtual environment in place while the hook is installed.
+
+[pep-668]: https://peps.python.org/pep-0668/
+[homebrew]: https://brew.sh/
+
+### Linux
+
+After installing Python 3.11 or newer and its `venv` support through your
+distribution, use the same project setup:
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+```
+
+## Verify the installation
+
+Check that the command is available:
+
+```bash
+scrub --help
 scrub scan somefile.txt
+python -m pytest
 ```
 
 On first run this downloads the Rampart model (~15 MB) into the Hugging
@@ -218,7 +287,13 @@ real but not 100% — see below).
 
 ## Uninstall
 
+Run these commands from the repository while its virtual environment is
+active. Uninstall the hook before deleting `.venv`, because the hook points to
+an executable inside it.
+
 ```bash
 scrub uninstall-hook --user      # or --project, matching how you installed it
+deactivate
+rm -rf .venv
 rm -rf ~/.cache/scrub            # redacted-copy cache + daemon socket/pidfile
 ```
